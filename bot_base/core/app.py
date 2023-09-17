@@ -33,3 +33,7 @@ class AppBase:
     def run(self):
         self.logger.info(f"Starting {self.__class__.__name__}")
         asyncio.run(self.bot.run())
+
+
+class App(AppBase):
+    pass

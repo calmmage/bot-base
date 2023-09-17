@@ -1,3 +1,3 @@
-from .app import AppBase
-from .app_config import AppConfig
+from .app import App
+from .app_config import AppConfig, TelegramBotConfig, DatabaseConfig
 from .telegram_bot import TelegramBot
