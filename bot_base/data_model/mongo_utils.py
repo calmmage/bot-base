@@ -34,13 +34,13 @@ import mongoengine
 from bson import ObjectId
 from dotenv import load_dotenv
 
-database_connected = False
+default_database_connected = False
 
 
 def connect_to_db(conn_str=None, db_name=None, alias=None, **kwargs):
-    global database_connected
+    global default_database_connected
     if alias is None or alias == 'default':
-        if database_connected:
+        if default_database_connected:
             return mongoengine.get_connection(alias=alias)
     load_dotenv()
 
@@ -55,7 +55,7 @@ def connect_to_db(conn_str=None, db_name=None, alias=None, **kwargs):
             raise ValueError("Database name not provided")
 
     if alias is None or alias == 'default':
-        database_connected = True
+        default_database_connected = True
     return mongoengine.connect(db=db_name, host=conn_str, alias=alias, **kwargs)
 
 
@@ -101,14 +101,14 @@ if __name__ == '__main__':
 
 
     add_item(SampleItem, name='item1', url='url1')
-    item = get_item(SampleItem, 'item1')
-    print(item.to_json())  # Should print the item
+    test_item = get_item(SampleItem, 'item1')
+    print(test_item.to_json())  # Should print the item
 
     # Assuming you know the '_id' of the item you just inserted
-    known_id = str(item.id)
-    update_item(SQDQueueItem, known_id, url='new_url1')
-    print(get_item(SQDQueueItem,
+    known_id = str(test_item.id)
+    update_item(SampleItem, known_id, url='new_url1')
+    print(get_item(SampleItem,
                    known_id).to_json())  # Should print the updated item
 
-    delete_item(SQDQueueItem, known_id)
-    print(get_item(SQDQueueItem, known_id))  # Should print None
+    delete_item(SampleItem, known_id)
+    print(get_item(SampleItem, known_id))  # Should print None
