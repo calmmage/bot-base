@@ -1,6 +1,9 @@
+import json
 import re
 from abc import ABC, abstractmethod
-from typing import Type, List
+from textwrap import dedent
+from typing import TYPE_CHECKING
+from typing import Type, List, Dict
 
 import aiogram
 import loguru
@@ -11,24 +14,30 @@ from dotenv import load_dotenv
 
 from app_config import TelegramBotConfig
 
+if TYPE_CHECKING:
+    from app import App
 
-class BotBase(ABC):
+
+# todo: find and use simple_command decorator that parses the incoming
+#  message and passes the parsed data to the handler, then sends the result
+#  back to the user
+class TelegramBotBase(ABC):
     _config_class: Type[TelegramBotConfig] = TelegramBotConfig
-
-    logger = loguru.logger.bind(component="TelegramBot")
 
     def __init__(self, config: _config_class = None):
         if config is None:
             config = self._load_config()
         self._config = config
-        # Initialize Bot instance with a default parse mode
-        # which will be passed to all API calls
-        self._aiogram_bot = aiogram.Bot(token=config.token,
-                                        parse_mode=ParseMode.MARKDOWN)
+
+        self.logger = loguru.logger.bind(component=self.__class__.__name__)
+
+        self._aiogram_bot: aiogram.Bot = aiogram.Bot(
+            token=config.token,
+            parse_mode=ParseMode.MARKDOWN
+        )
 
         # # All handlers should be attached to the Router (or Dispatcher)
-        # dp = Dispatcher()
-        self._dp = aiogram.Dispatcher(bot=self._aiogram_bot)
+        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
         self.bootstrap()
 
     def _load_config(self, **kwargs):
@@ -71,38 +80,54 @@ def mark_command(commands: List[str] = None, description: str = None):
     return wrapper
 
 
-class TelegramBot(BotBase):
-    def __init__(self, config: TelegramBotConfig = None, app: 'App' = None):
+class TelegramBot(TelegramBotBase):
+    def __init__(self, config: TelegramBotConfig = None,
+                 app: 'App' = None):
         super().__init__(config)
         self.app = app
 
         self._multi_message_mode = False
         self.messages_stack = []
 
-    def parse_message(self, message: types.Message) -> SQDQueueItemMessage:
-        # todo: extract media - photos, videos - content as well and save to
-        #  Notion
-        data = self._process_message_text(message)
+    async def start(self, message: types.Message):
+        response = dedent(f"""
+            Hi! I'm the {self.__class__.__name__}.
+            I'm based on the [bot-base](https://github.com/calmmage/bot-base) library.
+            I support the following features:
+            - voice messages parsing
+            - hashtag and attribute recognition (#ignore, ignore=True)
+            - multi-message mode
+            Use /help for more details
+            """)
+        await message.answer(response)
 
-        return SQDQueueItemMessage(
-            **data
-        )
+    @mark_command(['help'], description="Show this help message")
+    async def help(self, message: types.Message):
+        # todo: send a description / docstring of each command
+        #  I think I already implemented this somewhere.. summary bot?
+        #  automatically gather docstrings of all methods with @mark_command
+        # todo: bonus: use gpt for help conversation
+        raise NotImplementedError
 
-    def _process_message_text(self, message: types.Message, message_text: str
-    = None) -> Dict[str, str]:
-        if message_text is None:
-            message_text = self._extract_message_text(message)
-        data = self._parse_message_text(message_text)
+    @mark_command()
+    async def chat_message_handler(self, message: types.Message):
+        """
+        Placeholder implementation of main chat message handler
+        Parse the message as the bot will see it and send it back
+        Replace with your own implementation
+        """
+        message_text = self._extract_message_text(message)
+        self.logger.info(f"Received message: {message_text}")
+        if self._multi_message_mode:
+            self.messages_stack.append(message)
+        else:
+            # todo: use "make_simpple_command_handler" to create this demo
 
-        if 'description' not in data:
-            data['description'] = message_text
-        if 'name' not in data:
-            data['name'] = self._generate_name(message_text)
-        if 'queue' not in data:
-            data['queue'] = self._determine_queue(message)
-        if 'url' not in data:
-            data['url'] = self._extract_url(message_text)
-        return data
+            data = self._parse_message_text(message_text)
+            response = f"Message parsed: {json.dumps(data)}"
+            await message.answer(response)
+
+        return message_text
 
     def _parse_message_text(self, message_text: str) -> dict:
         result = {}
@@ -127,15 +152,20 @@ class TelegramBot(BotBase):
 
     hashtag_re = re.compile(r'#\w+')
     attribute_re = re.compile(r'(\w+)=(\w+)')
-    recognized_hashtags = {  # todo: add tags or type to preserve info
-        '#idea': {'queue': 'ideas'},
-        '#task': {'queue': 'tasks'},
-        '#shopping': {'queue': 'shopping'},
-        '#recommendation': {'queue': 'recommendations'},
-        '#feed': {'queue': 'feed'},
-        '#content': {'queue': 'content'},
-        '#feedback': {'queue': 'feedback'}
-    }
+    # todo: make abstract
+    # todo: add docstring / help string/ a way to view this list of
+    #  recognized tags. Log when a tag is recognized
+    # recognized_hashtags = {  # todo: add tags or type to preserve info
+    #     '#idea': {'queue': 'ideas'},
+    #     '#task': {'queue': 'tasks'},
+    #     '#shopping': {'queue': 'shopping'},
+    #     '#recommendation': {'queue': 'recommendations'},
+    #     '#feed': {'queue': 'feed'},
+    #     '#content': {'queue': 'content'},
+    #     '#feedback': {'queue': 'feedback'}
+    # }
+    # todo: how do I add a docstring / example of the proper format?
+    recognized_hashtags: Dict[str, Dict[str, str]] = {}
 
     def _parse_attributes(self, text):
         result = {}
@@ -145,54 +175,21 @@ class TelegramBot(BotBase):
         # if hashtag is recognized - parse it
         for hashtag in hashtags:
             if hashtag in self.recognized_hashtags:
-                # todo: support multiple queues / tags
+                self.logger.info(f"Recognized hashtag: {hashtag}")
+                # todo: support combining multiple queues / tags
+                #  e.g. #idea #task -> queues = [ideas, tasks]
                 result.update(self.recognized_hashtags[hashtag])
             else:
+                self.logger.info(f"Custom hashtag: {hashtag}")
                 result[hashtag[1:]] = True
 
         # parse explicit keys like queue=...
         attributes = self.attribute_re.findall(text)
         for key, value in attributes:
+            self.logger.info(f"Recognized attribute: {key}={value}")
             result[key] = value
 
         return result
-
-    @staticmethod
-    def _generate_name(message_text: str) -> str:
-        # topic + date
-        # todo: generate name with gpt (3?)
-        topic = message_text.strip().split('\n')[0].replace(' ', '-').lower()
-
-        date = datetime.now().strftime("%Y-%m-%d")
-        return f"{topic}-{date}"
-
-    @staticmethod
-    def _determine_queue(message: types.Message) -> str:
-        # for now - default
-        # todo: use chat_id -> queue mapping
-        return 'default'
-        # todo: determine queue based on message content
-        # option 1: use gpt (send message text and list of queues with
-        # descriptions)
-        # option 2: use gpt with function-calling (allow gpt to peek into ?
-
-    url_re = re.compile(r'https?://(?:[-\w.]|%[\da-fA-F]{2})+')
-
-    def _extract_url(self, message_text, message: types.Message = None):
-        # option 1: if message contains url - extract it.
-        # Support hidden links
-        # message_text = message.md_text
-        # todo: add support for multi-url case
-        data = self.url_re.findall(message_text)
-        if data:
-            return data[0]
-
-        # option 2: Save to Notion and then store Notion page url
-        pass
-
-        # option 3: If there's media content - save and add a link to it
-        pass
-        return None
 
     def _extract_message_text(self, message: types.Message) -> str:
         result = ""
@@ -212,6 +209,8 @@ class TelegramBot(BotBase):
 
     def _process_voice_message(self, voice_message):
         # extract and parse message with whisper api
+        # todo: use app, not whisper directly
+        # todo: use smart filters for voice messages?
         raise NotImplementedError
 
     @mark_command(commands=['multistart'],
@@ -228,11 +227,15 @@ class TelegramBot(BotBase):
         # deactivate multi-message mode and process content
         self._multi_message_mode = False
         self.logger.info("Multi-message mode deactivated. Processing messages")
-
-        self.process_messages_stack()
+        response = await self.process_messages_stack()
+        await message.answer(response)
         self.logger.info("Messages processed")  # todo: report results / link
 
-    def process_messages_stack(self):
+    async def process_messages_stack(self):
+        """
+        This is a placeholder implementation to demonstrate the feature
+        :return:
+        """
         if len(self.messages_stack) == 0:
             self.logger.info("No messages to process")
             return
@@ -242,105 +245,15 @@ class TelegramBot(BotBase):
             # todo: parse message content one by one.
             #  to support parsing of the videos and other applied modifiers
             messages_text += self._extract_message_text(message)
+        data = self._parse_message_text(messages_text)
+        response = f"Message parsed: {json.dumps(data)}"
 
-        data = self._process_message_text(self.messages_stack[0], messages_text)
-
-        item = SQDQueueItemMessage(
-            **data
-        )
-        self.app.add_item(item)
-
-        self.logger.info(f"Messages processed, clearing stack")
-        self.messages_stack = []
-        # return item
-
-    async def process_message(self, message: types.Message):
-        if self._multi_message_mode:
-            self.messages_stack.append(message)
-        else:
-            # todo: make some smarter logic here. for example - pick between
-            # add item and bulk add
-            # automatically start multi-message mode
-            await self.add_item(message)
+        return response
 
     def bootstrap(self):
         # todo: simple message parsing
-        self.register_command(self.process_message)
-        # self.register_command(self.on_setup, commands=['setup'])
-        self.register_command(self.add_item, commands=['add'])
+        self.register_command(self.chat_message_handler)
+        self.register_command(self.start, commands=['start'])
+        self.register_command(self.help, commands=['help'])
         self.register_command(self.multi_message_start, commands=['multistart'])
         self.register_command(self.multi_message_end, commands=['multiend'])
-        # todo: /setup command
-        # todo: /bulkadd command
-
-    # ------------------------------------------------------
-    # New Commands
-    # ------------------------------------------------------
-
-    @mark_command(commands=['addqueue'], description="Add a new queue")
-    def add_queue(self, message: types.Message):
-        raise NotImplementedError
-
-    @mark_command(commands=['register'], description="Setup a new queue")
-    async def register_queue(self, message: types.Message):
-        """
-        # register a new chat config
-        # components:
-        #  1) queue = . default = defaut
-        #  2) chat_id = defualt = this chat
-        #  3) type = default = output
-        # idea:
-        #  possible chat connection type
-        #  1) Input
-        #  2) Output
-        #  3) Archive
-        """
-        message_text = self._extract_message_text(message)
-        data = self._parse_message_text(message_text)
-        if 'queue' not in data:
-            data['queue'] = 'default'
-        if 'chat_id' not in data:
-            data['chat_id'] = message.chat.id
-        if 'type' not in data:
-            data['type'] = 'output'
-
-        item = SQDQueueInfoMessage(**data)
-        self.app.add_queue(item)
-
-    @mark_command(commands=['bulkadd'],
-                  description="Add multiple items to queue")
-    async def bulk_add(self, message: types.Message):
-        # Idea: split a single message into multiple items and process them
-        #  one by one. Use gpt to split the message into multiple items?
-        # Simple MVP: split by newlines, -
-        # bonus: sub-items with indentationbul
-
-        # todo: hard - support multi-message mode
-
-        # todo: bonus - add an option to #guess automatically
-
-        # todo: request missing data one by one
-        raise NotImplementedError
-
-    @mark_command()
-    async def get(self, message: types.Message):
-        """
-        Get item using provided info appropriately
-        - If there's key - get by key
-        - if #random - get random item
-        - if nothing - get latest
-        """
-        pass
-
-    @mark_command()
-    async def get_item(self, message: types.Message):
-        """
-        # get item by id / key
-        """
-        pass
-
-# def run_bot():
-#     bot = TelegramBot()
-#     # todo: use loguru
-#     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-#     asyncio.run(bot.run())
