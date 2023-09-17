@@ -26,9 +26,13 @@ class AppBase:
         return self._app_config_class(**kwargs)
 
     def _connect_db(self):
-        db_config = self.config.database
-        return mongoengine.connect(db=db_config.name,  # alias = db_config.name
-                                   host=db_config.conn_str)
+        try:
+            return mongoengine.get_connection('default')
+        except mongoengine.connection.ConnectionFailure:
+            db_config = self.config.database
+            return mongoengine.connect(db=db_config.name,
+                                       # alias = db_config.name
+                                       host=db_config.conn_str)
 
     def run(self):
         self.logger.info(f"Starting {self.__class__.__name__}")
