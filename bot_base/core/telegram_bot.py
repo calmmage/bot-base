@@ -236,6 +236,11 @@ class TelegramBot(TelegramBotBase):
         This is a placeholder implementation to demonstrate the feature
         :return:
         """
+        data = self._extract_stacked_messages_data()
+        response = f"Message parsed: {json.dumps(data)}"
+        return response
+
+    def _extract_stacked_messages_data(self):
         if len(self.messages_stack) == 0:
             self.logger.info("No messages to process")
             return
@@ -245,10 +250,7 @@ class TelegramBot(TelegramBotBase):
             # todo: parse message content one by one.
             #  to support parsing of the videos and other applied modifiers
             messages_text += self._extract_message_text(message)
-        data = self._parse_message_text(messages_text)
-        response = f"Message parsed: {json.dumps(data)}"
-
-        return response
+        return self._parse_message_text(messages_text)
 
     def bootstrap(self):
         # todo: simple message parsing
