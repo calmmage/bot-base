@@ -238,6 +238,9 @@ class TelegramBot(TelegramBotBase):
         """
         data = self._extract_stacked_messages_data()
         response = f"Message parsed: {json.dumps(data)}"
+        
+        self.logger.info(f"Messages processed, clearing stack")
+        self.messages_stack = []
         return response
 
     def _extract_stacked_messages_data(self):
