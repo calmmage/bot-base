@@ -12,10 +12,10 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from dotenv import load_dotenv
 
-from app_config import TelegramBotConfig
+from bot_base.core import TelegramBotConfig
 
 if TYPE_CHECKING:
-    from app import App
+    from bot_base.core import App
 
 
 # todo: find and use simple_command decorator that parses the incoming
