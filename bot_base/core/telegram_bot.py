@@ -1,6 +1,11 @@
 import json
+import os
 import re
+import tempfile
 from abc import ABC, abstractmethod
+from datetime import datetime
+from functools import wraps
+from io import BytesIO
 from textwrap import dedent
 from typing import TYPE_CHECKING
 from typing import Type, List, Dict
@@ -13,6 +18,8 @@ from aiogram.filters import Command
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
+from bot_base.utils.telegram_utils import split_long_message, \
+    MAX_TELEGRAM_MESSAGE_LENGTH
 
 if TYPE_CHECKING:
     from bot_base.core import App
@@ -72,6 +79,7 @@ def mark_command(commands: List[str] = None, description: str = None):
             description=description
         )
 
+        @wraps(func)
         def wrapped(*args, **kwargs):
             return func(*args, **kwargs)
 
@@ -109,14 +117,13 @@ class TelegramBot(TelegramBotBase):
         # todo: bonus: use gpt for help conversation
         raise NotImplementedError
 
-    @mark_command()
     async def chat_message_handler(self, message: types.Message):
         """
         Placeholder implementation of main chat message handler
         Parse the message as the bot will see it and send it back
         Replace with your own implementation
         """
-        message_text = self._extract_message_text(message)
+        message_text = await self._extract_message_text(message)
         self.logger.info(f"Received message: {message_text}")
         if self._multi_message_mode:
             self.messages_stack.append(message)
@@ -125,7 +132,8 @@ class TelegramBot(TelegramBotBase):
 
             data = self._parse_message_text(message_text)
             response = f"Message parsed: {json.dumps(data)}"
-            await message.answer(response)
+            # await message.answer(response)
+            await self.send_safe(message.chat.id, response)
 
         return message_text
 
@@ -191,7 +199,7 @@ class TelegramBot(TelegramBotBase):
 
         return result
 
-    def _extract_message_text(self, message: types.Message) -> str:
+    async def _extract_message_text(self, message: types.Message) -> str:
         result = ""
         # option 1: message text
         if message.text:
@@ -200,18 +208,39 @@ class TelegramBot(TelegramBotBase):
         if message.caption:
             result += message.caption
         # option 3: voice/video message
-        if message.voice:
-            result += self._process_voice_message(message.voice)
+        if message.voice or message.audio:
+            # todo: accept voice message
+            # result += await self._process_voice_message(message.voice)
+            result += await self._process_voice_message(message)
         # option 4: content - only extract if explicitly asked?
         # support multi-message content extraction?
         # todo: ... if content_parsing_mode is enabled - parse content text
         return result
 
-    def _process_voice_message(self, voice_message):
+    async def _process_voice_message(self, message):  # todo
         # extract and parse message with whisper api
         # todo: use app, not whisper directly
         # todo: use smart filters for voice messages?
-        raise NotImplementedError
+        if message.audio:
+            audio_file_id = message.audio.file_id
+        else:
+            audio_file_id = message.voice.file_id
+
+        # download the file
+        await message.answer(f"Downloading audio file from {audio_file_id}")
+        # audio_file = await message.bot.download_file_by_id(audio_url)
+        # self._aiogram_bot.download(audio_file, "temp.mp3")
+
+        audio_file = await self._aiogram_bot.get_file(audio_file_id)
+
+        # Create a temporary directory to store the file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file_path = os.path.join(temp_dir, "temp_audio_file")
+
+            await self._aiogram_bot.download(audio_file,
+                                             destination=temp_file_path)
+
+            return await self.app.parse_audio(temp_file_path)
 
     @mark_command(commands=['multistart'],
                   description="Start multi-message mode")
@@ -236,14 +265,14 @@ class TelegramBot(TelegramBotBase):
         This is a placeholder implementation to demonstrate the feature
         :return:
         """
-        data = self._extract_stacked_messages_data()
+        data = await self._extract_stacked_messages_data()
         response = f"Message parsed: {json.dumps(data)}"
-        
+
         self.logger.info(f"Messages processed, clearing stack")
         self.messages_stack = []
         return response
 
-    def _extract_stacked_messages_data(self):
+    async def _extract_stacked_messages_data(self):
         if len(self.messages_stack) == 0:
             self.logger.info("No messages to process")
             return
@@ -252,7 +281,7 @@ class TelegramBot(TelegramBotBase):
         for message in self.messages_stack:
             # todo: parse message content one by one.
             #  to support parsing of the videos and other applied modifiers
-            messages_text += self._extract_message_text(message)
+            messages_text += await self._extract_message_text(message)
         return self._parse_message_text(messages_text)
 
     def bootstrap(self):
@@ -262,3 +291,27 @@ class TelegramBot(TelegramBotBase):
         self.register_command(self.help, commands=['help'])
         self.register_command(self.multi_message_start, commands=['multistart'])
         self.register_command(self.multi_message_end, commands=['multiend'])
+
+    async def send_safe(self, chat_id, text: str):
+        # todo: consider alternative: send as text file attachment
+        # option 1: make a setting
+        # option 2: if > 4096 - send as file
+        # option 3: send as file + send start of text at the same time
+        if self.send_long_messages_as_file:
+            if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
+                await self._aiogram_bot.send_message(
+                    chat_id, split_long_message(text)[0])
+                text_buffer = BytesIO(text.encode('utf-8'))
+                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                text_buffer.name = f"{date}.txt"
+
+                # Send as document
+                # await bot.send_document(chat_id, text_buffer)
+                await self._aiogram_bot.send_document(chat_id, text_buffer)
+        else:
+            for chunk in split_long_message(text):
+                await self._aiogram_bot.send_message(chat_id, chunk)
+
+    @property
+    def send_long_messages_as_file(self):
+        return self._config.send_long_messages_as_file
