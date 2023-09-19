@@ -69,7 +69,7 @@ def setup_logger(log_to_stderr: bool = None,
     if log_to_stderr is None:
         log_to_stderr = os.getenv('LOG_TO_STDERR', True)
     if log_to_stderr:
-        logger.add(sys.stderr, level="INFO")
+        logger.add(sys.stderr, level="DEBUG")
 
     if log_to_file is None:
         log_to_file = os.getenv('LOG_TO_FILE', False)
@@ -83,7 +83,7 @@ def setup_logger(log_to_stderr: bool = None,
     if log_to_db is None:
         log_to_db = os.getenv('LOG_TO_DB', False)
     if log_to_db:
-        logger.add(mongo_sink, level="DEBUG")
+        logger.add(mongo_sink, level="INFO")
 
     # return logger
     logger_initialized = True
