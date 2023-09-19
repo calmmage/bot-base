@@ -14,12 +14,13 @@ import loguru
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import FSInputFile
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
-from bot_base.utils.telegram_utils import split_long_message, \
-    MAX_TELEGRAM_MESSAGE_LENGTH
+from bot_base.utils.telegram_utils import (
+    split_long_message,
+    MAX_TELEGRAM_MESSAGE_LENGTH,
+)
 
 if TYPE_CHECKING:
     from bot_base.core import App
@@ -39,8 +40,7 @@ class TelegramBotBase(ABC):
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
 
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
-            token=config.token,
-            parse_mode=ParseMode.MARKDOWN
+            token=config.token, parse_mode=ParseMode.MARKDOWN
         )
 
         # # All handlers should be attached to the Router (or Dispatcher)
@@ -70,8 +70,7 @@ class TelegramBotBase(ABC):
 
     async def _set_bot_commands(self):
         bot_commands = [
-            types.BotCommand(command=c,
-                             description=d or self.NO_COMMAND_DESCRIPTION)
+            types.BotCommand(command=c, description=d or self.NO_COMMAND_DESCRIPTION)
             for c, d in self.commands
         ]
         await self._aiogram_bot.set_my_commands(bot_commands)
@@ -95,10 +94,7 @@ class TelegramBotBase(ABC):
 # todo: use decorator to mark commands and parse automatically
 def mark_command(commands: List[str] = None, description: str = None):
     def wrapper(func):
-        func._command_description = dict(
-            commands=commands,
-            description=description
-        )
+        func._command_description = dict(commands=commands, description=description)
 
         @wraps(func)
         def wrapped(*args, **kwargs):
@@ -112,8 +108,7 @@ def mark_command(commands: List[str] = None, description: str = None):
 class TelegramBot(TelegramBotBase):
     _commands = []
 
-    def __init__(self, config: TelegramBotConfig = None,
-                 app: 'App' = None):
+    def __init__(self, config: TelegramBotConfig = None, app: "App" = None):
         super().__init__(config)
         self.app = app
 
@@ -121,7 +116,8 @@ class TelegramBot(TelegramBotBase):
         self.messages_stack = []
 
     async def start(self, message: types.Message):
-        response = dedent(f"""
+        response = dedent(
+            f"""
             Hi! I'm the {self.__class__.__name__}.
             I'm based on the [bot-base](https://github.com/calmmage/bot-base) library.
             I support the following features:
@@ -129,10 +125,11 @@ class TelegramBot(TelegramBotBase):
             - hashtag and attribute recognition (#ignore, ignore=True)
             - multi-message mode
             Use /help for more details
-            """)
+            """
+        )
         await message.answer(response)
 
-    @mark_command(['help'], description="Show this help message")
+    @mark_command(["help"], description="Show this help message")
     async def help(self, message: types.Message):
         # todo: send a description / docstring of each command
         #  I think I already implemented this somewhere.. summary bot?
@@ -163,26 +160,26 @@ class TelegramBot(TelegramBotBase):
     def _parse_message_text(self, message_text: str) -> dict:
         result = {}
         # drop the /command part if present
-        if message_text.startswith('/'):
-            _, message_text = message_text.split(' ', 1)
+        if message_text.startswith("/"):
+            _, message_text = message_text.split(" ", 1)
 
         # if it's not code - parse hashtags
-        if '#code' in message_text:
-            hashtags, message_text = message_text.split('#code', 1)
+        if "#code" in message_text:
+            hashtags, message_text = message_text.split("#code", 1)
             # result.update(self._parse_attributes(hashtags))
             if message_text.strip():
-                result['description'] = message_text
-        elif '```' in message_text:
-            hashtags, _ = message_text.split('```', 1)
+                result["description"] = message_text
+        elif "```" in message_text:
+            hashtags, _ = message_text.split("```", 1)
             result.update(self._parse_attributes(hashtags))
-            result['description'] = message_text
+            result["description"] = message_text
         else:
             result.update(self._parse_attributes(message_text))
-            result['description'] = message_text
+            result["description"] = message_text
         return result
 
-    hashtag_re = re.compile(r'#\w+')
-    attribute_re = re.compile(r'(\w+)=(\w+)')
+    hashtag_re = re.compile(r"#\w+")
+    attribute_re = re.compile(r"(\w+)=(\w+)")
     # todo: make abstract
     # todo: add docstring / help string/ a way to view this list of
     #  recognized tags. Log when a tag is recognized
@@ -260,13 +257,11 @@ class TelegramBot(TelegramBotBase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_file_path = os.path.join(temp_dir, "temp_audio_file")
 
-            await self._aiogram_bot.download(audio_file,
-                                             destination=temp_file_path)
+            await self._aiogram_bot.download(audio_file, destination=temp_file_path)
 
             return await self.app.parse_audio(temp_file_path)
 
-    @mark_command(commands=['multistart'],
-                  description="Start multi-message mode")
+    @mark_command(commands=["multistart"], description="Start multi-message mode")
     async def multi_message_start(self, message: types.Message):
         # activate multi-message mode
         self._multi_message_mode = True
@@ -274,7 +269,7 @@ class TelegramBot(TelegramBotBase):
         # todo: initiate timeout and if not deactivated - process messages
         #  automatically
 
-    @mark_command(commands=['multiend'], description="End multi-message mode")
+    @mark_command(commands=["multiend"], description="End multi-message mode")
     async def multi_message_end(self, message: types.Message):
         # deactivate multi-message mode and process content
         self._multi_message_mode = False
@@ -315,39 +310,35 @@ class TelegramBot(TelegramBotBase):
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 await self._aiogram_bot.send_message(
-                    chat_id, split_long_message(text)[0])
+                    chat_id, split_long_message(text)[0]
+                )
                 date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 filename = f"transcript_{date}.txt"
                 await self._send_as_file(
-                    chat_id, text, reply_to_message_id=reply_to_message_id,
-                    filename=filename
+                    chat_id,
+                    text,
+                    reply_to_message_id=reply_to_message_id,
+                    filename=filename,
                 )
             else:
                 await self._aiogram_bot.send_message(
-                    chat_id, text, reply_to_message_id=reply_to_message_id)
+                    chat_id, text, reply_to_message_id=reply_to_message_id
+                )
         else:
             for chunk in split_long_message(text):
                 await self._aiogram_bot.send_message(
-                    chat_id, chunk, reply_to_message_id=reply_to_message_id)
+                    chat_id, chunk, reply_to_message_id=reply_to_message_id
+                )
 
-    async def _send_as_file(self, chat_id, text, reply_to_message_id=None,
-                            filename=None):
+    async def _send_as_file(
+        self, chat_id, text, reply_to_message_id=None, filename=None
+    ):
+        from aiogram.types.input_file import BufferedInputFile
 
-        # Create a temporary dir
-        with tempfile.TemporaryDirectory() as temp_dir:
-            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            if filename is None:
-                filename = f"{date}.txt"
-            temp_file_path = os.path.join(temp_dir, filename)
-
-            # Write the text data to the temporary file
-            with open(temp_file_path, 'w') as temp_file:
-                temp_file.write(text)
-            self.logger.debug(f"Sending file saved at {temp_file_path}")
-            # Send the file using Aiogram
-            await self._aiogram_bot.send_document(
-                chat_id, FSInputFile(temp_file_path),
-                reply_to_message_id=reply_to_message_id)
+        temp_file = BufferedInputFile(text.encode("utf-8"), filename)
+        await self._aiogram_bot.send_document(
+            chat_id, temp_file, reply_to_message_id=reply_to_message_id
+        )
 
     @property
     def send_long_messages_as_files(self):
@@ -355,15 +346,14 @@ class TelegramBot(TelegramBotBase):
 
     async def bootstrap(self):
         # todo: simple message parsing
-        self.register_command(self.start, commands=['start'])
-        self.register_command(self.help, commands=['help'])
-        self.register_command(self.multi_message_start, commands=['multistart'])
-        self.register_command(self.multi_message_end, commands=['multiend'])
+        self.register_command(self.start, commands=["start"])
+        self.register_command(self.help, commands=["help"])
+        self.register_command(self.multi_message_start, commands=["multistart"])
+        self.register_command(self.multi_message_end, commands=["multiend"])
 
         if self._config.test_mode:
             self.logger.debug("Running in test mode")
-            self.register_command(self.test_send_file,
-                                  commands=['testfilesend'])
+            self.register_command(self.test_send_file, commands=["testfilesend"])
 
         self.register_command(self.chat_message_handler)
 
@@ -372,5 +362,4 @@ class TelegramBot(TelegramBotBase):
     # -----------------------------------------------------
     async def test_send_file(self, message: types.Message):
         self.logger.debug("Received testfilesend command")
-        await self._send_as_file(message.chat.id, "test text",
-                                 message.message_id)
+        await self._send_as_file(message.chat.id, "test text", message.message_id)
