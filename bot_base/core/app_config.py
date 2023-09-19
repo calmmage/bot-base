@@ -16,6 +16,9 @@ class DatabaseConfig(BaseSettings):
 class TelegramBotConfig(BaseSettings):
     token: str
 
+    send_long_messages_as_files: bool = True
+    test_mode: bool = False
+
     class Config:
         extra = 'ignore'
         env_prefix = 'TELEGRAM_BOT_'
@@ -28,8 +31,6 @@ class AppConfig(BaseSettings):
     database: DatabaseConfig
     telegram_bot: TelegramBotConfig
     openai_api_key: str
-
-    send_long_messages_as_files: bool = True
 
     @model_validator(mode='before')
     @classmethod

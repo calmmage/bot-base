@@ -5,7 +5,6 @@ import tempfile
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import wraps
-from io import BytesIO
 from textwrap import dedent
 from typing import TYPE_CHECKING
 from typing import Type, List, Dict
@@ -15,6 +14,7 @@ import loguru
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.types import FSInputFile
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
@@ -45,25 +45,46 @@ class TelegramBotBase(ABC):
 
         # # All handlers should be attached to the Router (or Dispatcher)
         self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
-        self.bootstrap()
 
     def _load_config(self, **kwargs):
         load_dotenv()
         return self._config_class(**kwargs)
 
-    @abstractmethod
-    def bootstrap(self):
-        pass
-
-    def register_command(self, handler, commands=None):
+    def register_command(self, handler, commands=None, description=None):
         if commands is None:
             # register a simple message handler
             command_decorator = self._dp.message()
         else:
+            self._commands.extend([(c, description) for c in commands])
             command_decorator = self._dp.message(Command(commands=commands))
+        self.logger.info(f"Registering command {commands}")
         command_decorator(handler)
 
+    _commands: List
+
+    @property
+    def commands(self):
+        return self._commands
+
+    NO_COMMAND_DESCRIPTION = "No description provided"
+
+    async def _set_bot_commands(self):
+        bot_commands = [
+            types.BotCommand(command=c,
+                             description=d or self.NO_COMMAND_DESCRIPTION)
+            for c, d in self.commands
+        ]
+        await self._aiogram_bot.set_my_commands(bot_commands)
+
+    @abstractmethod
+    async def bootstrap(self):
+        pass
+        # super().bootstrap()
+
     async def run(self) -> None:
+        await self.bootstrap()
+        await self._set_bot_commands()
+
         bot_name = (await self._aiogram_bot.get_me()).username
         bot_link = f"https://t.me/{bot_name}"
         self.logger.info(f"Starting telegram bot at {bot_link}")
@@ -89,6 +110,8 @@ def mark_command(commands: List[str] = None, description: str = None):
 
 
 class TelegramBot(TelegramBotBase):
+    _commands = []
+
     def __init__(self, config: TelegramBotConfig = None,
                  app: 'App' = None):
         super().__init__(config)
@@ -131,9 +154,9 @@ class TelegramBot(TelegramBotBase):
             # todo: use "make_simpple_command_handler" to create this demo
 
             data = self._parse_message_text(message_text)
-            response = f"Message parsed: {json.dumps(data)}"
+            response = f"Message parsed: {json.dumps(data, ensure_ascii=False)}"
             # await message.answer(response)
-            await self.send_safe(message.chat.id, response)
+            await self.send_safe(message.chat.id, response, message.message_id)
 
         return message_text
 
@@ -284,34 +307,70 @@ class TelegramBot(TelegramBotBase):
             messages_text += await self._extract_message_text(message)
         return self._parse_message_text(messages_text)
 
-    def bootstrap(self):
+    async def send_safe(self, chat_id, text: str, reply_to_message_id=None):
+        # todo: consider alternative: send as text file attachment
+        # option 1: make a setting
+        # option 2: if > 4096 - send as file
+        # option 3: send as file + send start of text at the same time
+        if self.send_long_messages_as_files:
+            if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
+                await self._aiogram_bot.send_message(
+                    chat_id, split_long_message(text)[0])
+                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                filename = f"transcript_{date}.txt"
+                await self._send_as_file(
+                    chat_id, text, reply_to_message_id=reply_to_message_id,
+                    filename=filename
+                )
+            else:
+                await self._aiogram_bot.send_message(
+                    chat_id, text, reply_to_message_id=reply_to_message_id)
+        else:
+            for chunk in split_long_message(text):
+                await self._aiogram_bot.send_message(
+                    chat_id, chunk, reply_to_message_id=reply_to_message_id)
+
+    async def _send_as_file(self, chat_id, text, reply_to_message_id=None,
+                            filename=None):
+
+        # Create a temporary dir
+        with tempfile.TemporaryDirectory() as temp_dir:
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            if filename is None:
+                filename = f"{date}.txt"
+            temp_file_path = os.path.join(temp_dir, filename)
+
+            # Write the text data to the temporary file
+            with open(temp_file_path, 'w') as temp_file:
+                temp_file.write(text)
+            self.logger.debug(f"Sending file saved at {temp_file_path}")
+            # Send the file using Aiogram
+            await self._aiogram_bot.send_document(
+                chat_id, FSInputFile(temp_file_path),
+                reply_to_message_id=reply_to_message_id)
+
+    @property
+    def send_long_messages_as_files(self):
+        return self._config.send_long_messages_as_files
+
+    async def bootstrap(self):
         # todo: simple message parsing
-        self.register_command(self.chat_message_handler)
         self.register_command(self.start, commands=['start'])
         self.register_command(self.help, commands=['help'])
         self.register_command(self.multi_message_start, commands=['multistart'])
         self.register_command(self.multi_message_end, commands=['multiend'])
 
-    async def send_safe(self, chat_id, text: str):
-        # todo: consider alternative: send as text file attachment
-        # option 1: make a setting
-        # option 2: if > 4096 - send as file
-        # option 3: send as file + send start of text at the same time
-        if self.send_long_messages_as_file:
-            if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
-                await self._aiogram_bot.send_message(
-                    chat_id, split_long_message(text)[0])
-                text_buffer = BytesIO(text.encode('utf-8'))
-                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                text_buffer.name = f"{date}.txt"
+        if self._config.test_mode:
+            self.logger.debug("Running in test mode")
+            self.register_command(self.test_send_file,
+                                  commands=['testfilesend'])
 
-                # Send as document
-                # await bot.send_document(chat_id, text_buffer)
-                await self._aiogram_bot.send_document(chat_id, text_buffer)
-        else:
-            for chunk in split_long_message(text):
-                await self._aiogram_bot.send_message(chat_id, chunk)
+        self.register_command(self.chat_message_handler)
 
-    @property
-    def send_long_messages_as_file(self):
-        return self._config.send_long_messages_as_file
+    # -----------------------------------------------------
+    # TEST MODE
+    # -----------------------------------------------------
+    async def test_send_file(self, message: types.Message):
+        self.logger.debug("Received testfilesend command")
+        await self._send_as_file(message.chat.id, "test text",
+                                 message.message_id)
