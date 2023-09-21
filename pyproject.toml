@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.1.3"
+version = "0.2.0"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
@@ -14,6 +14,7 @@ loguru = "^0.7.2"
 mongoengine = "^0.27.0"
 pydub = "^0.25.1"
 aiogram = "^3.0.0"
+tiktoken = "*"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"
