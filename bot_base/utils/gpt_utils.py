@@ -2,7 +2,7 @@ import asyncio
 import json
 from functools import partial
 from io import BytesIO
-from typing import Union
+from typing import Union, BinaryIO
 
 import loguru
 import openai
@@ -46,17 +46,17 @@ async def arun_command_with_gpt(command: str, data: str, model="gpt-3.5-turbo"):
     return response.choices[0].message.content
 
 
-Audio = Union[pydub.AudioSegment, BytesIO, str]
+Audio = Union[pydub.AudioSegment, BytesIO, BinaryIO, str]
 
 
 def transcribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, (str, BytesIO)):
+    if isinstance(audio, (str, BytesIO, BinaryIO)):
         audio = openai.Audio.from_file(audio)
     return openai.Audio.transcribe(model, audio).text
 
 
 async def atranscribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, (str, BytesIO)):
+    if isinstance(audio, (str, BytesIO, BinaryIO)):
         audio = openai.Audio.from_file(audio)
     result = await openai.Audio.atranscribe(model, audio)
     return result.text

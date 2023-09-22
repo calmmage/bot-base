@@ -1,6 +1,8 @@
 from io import BytesIO
 
 import asyncio
+from typing import BinaryIO
+
 import loguru
 import pydub
 from pydub import AudioSegment
@@ -48,21 +50,10 @@ async def split_and_transcribe_audio(
     if logger is None:
         logger = loguru.logger
 
-    if isinstance(audio, str):
-        audio = AudioSegment.from_file(audio)
-    if not isinstance(audio, AudioSegment):
+    if isinstance(audio, (str, BytesIO, BinaryIO)):
         audio = AudioSegment.from_file(audio)
 
     audio_chunks = split_audio(audio, period=period, buffer=buffer, logger=logger)
-
-    # joined_text = ""
-    results = {}
-
-    # todo: rework with gather
-    # async def parse_chunk(i, audio):
-    #     logger.debug(f"Starting to parse chunk {i}")
-    #     results[i] = await atranscribe_audio(audio)
-    #     logger.debug(f"Finished parsing chunk {i}")
 
     if parallel:
         logger.info("Processing chunks in parallel")
@@ -70,8 +61,7 @@ async def split_and_transcribe_audio(
         text_chunks = await asyncio.gather(*tasks)
     else:
         logger.info("Processing chunks sequentially")
-        text_chunks = map(transcribe_audio, tqdm(audio_chunks))
+        text_chunks = [transcribe_audio(chunk) for chunk in tqdm(audio_chunks)]
 
-    chunks = [results[i].text for i in range(len(chunks))]
-    logger.info(f"Parsed audio: {chunks}")
-    return chunks
+    logger.info(f"Parsed audio: {text_chunks}")
+    return text_chunks
