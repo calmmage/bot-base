@@ -13,6 +13,8 @@ class DatabaseConfig(BaseSettings):
 
 class TelegramBotConfig(BaseSettings):
     token: SecretStr = SecretStr("")
+    api_id: SecretStr = SecretStr("")
+    api_hash: SecretStr = SecretStr("")
 
     send_long_messages_as_files: bool = True
     test_mode: bool = False

@@ -1,10 +1,8 @@
-from io import BytesIO
-
 import asyncio
+from io import BytesIO
 from typing import BinaryIO
 
 import loguru
-import pydub
 from pydub import AudioSegment
 from tqdm.auto import tqdm
 
@@ -15,8 +13,10 @@ DEFAULT_BUFFER = 5 * 1000
 
 
 def split_audio(
-    audio: pydub.AudioSegment, period=DEFAULT_PERIOD, buffer=DEFAULT_BUFFER, logger=None
+    audio: Audio, period=DEFAULT_PERIOD, buffer=DEFAULT_BUFFER, logger=None
 ):
+    if isinstance(audio, (str, BytesIO, BinaryIO)):
+        audio = AudioSegment.from_file(audio)
     if logger is None:
         logger = loguru.logger
     chunks = []

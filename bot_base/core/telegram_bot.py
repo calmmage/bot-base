@@ -1,5 +1,7 @@
+import asyncio
 import json
 import re
+import subprocess
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import wraps
@@ -9,12 +11,14 @@ from typing import Type, List, Dict
 
 import aiogram
 import loguru
+import pyrogram
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
+from bot_base.utils import tools_dir
 from bot_base.utils.text_utils import MAX_TELEGRAM_MESSAGE_LENGTH, split_long_message
 
 if TYPE_CHECKING:
@@ -32,14 +36,31 @@ class TelegramBotBase(ABC):
             config = self._load_config()
         self.config = config
 
+        # from aiogram import Bot, Dispatcher
+        # from pyrogram import Client
+
+        loop = asyncio.get_event_loop()
+        asyncio.set_event_loop(loop)
+
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
         token = config.token.get_secret_value()
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
             token=token, parse_mode=ParseMode.MARKDOWN
         )
+        self.pyrogram_client = self._init_pyrogram_client()
 
         # # All handlers should be attached to the Router (or Dispatcher)
-        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
+        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(
+            bot=self._aiogram_bot, loop=loop
+        )
+
+    def _init_pyrogram_client(self):
+        return pyrogram.Client(
+            self.__class__.__name__,
+            api_id=self.config.api_id.get_secret_value(),
+            api_hash=self.config.api_hash.get_secret_value(),
+            bot_token=self.config.token.get_secret_value(),
+        )
 
     def _load_config(self, **kwargs):
         load_dotenv()
@@ -89,6 +110,39 @@ class TelegramBotBase(ABC):
         self.logger.info(f"Starting telegram bot at {bot_link}")
         # And the run events dispatching
         await self._dp.start_polling(self._aiogram_bot)
+
+    # todo: app.run(...)
+    # async def download_large_file(self, chat_id, message_id):
+    #     async with self.pyrogram_client as app:
+    #         message = await app.get_messages(chat_id, message_ids=message_id)
+    #         return await message.download(in_memory=True)
+
+    async def download_large_file(self, chat_id, message_id, target_path=None):
+        # todo: troubleshoot chat_id. Only username works for now.
+        script_path = tools_dir / "download_file_with_pyrogram.py"
+        # Construct command to run the download script
+        cmd = [
+            "python",
+            str(script_path),
+            "--chat-id",
+            str(chat_id),
+            "--message-id",
+            str(message_id),
+            "--token",
+            self.config.token.get_secret_value(),
+            "--api-id",
+            self.config.api_id.get_secret_value(),
+            "--api-hash",
+            self.config.api_hash.get_secret_value(),
+        ]
+
+        if target_path:
+            cmd.extend(["--target-path", target_path])
+        self.logger.debug(f"Running command: {' '.join(cmd)}")
+        # Run the command in a separate thread and await its result
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+        file_path = result.stdout.strip().decode("utf-8")
+        return file_path
 
 
 command_registry = []
@@ -276,12 +330,24 @@ class TelegramBot(TelegramBotBase):
         # extract and parse message with whisper api
         # todo: use smart filters for voice messages?
         if message.audio:
-            audio_file_id = message.audio.file_id
+            self.logger.debug(f"Detected audio message")
+            file_desc = message.audio
+        elif message.voice:
+            self.logger.debug(f"Detected voice message")
+            file_desc = message.voice
         else:
-            audio_file_id = message.voice.file_id
+            raise ValueError("No audio file detected")
 
-        file = await self._aiogram_bot.download(audio_file_id)
+        file = await self.download_file(message, file_desc)
         return await self.app.parse_audio(file, parallel=parallel)
+
+    async def download_file(self, message: types.Message, file_desc):
+        if file_desc.file_size < 20 * 1024 * 1024:
+            return await self._aiogram_bot.download(file_desc.file_id)
+        else:
+            return await self.download_large_file(
+                message.chat.username, message.message_id
+            )
 
     async def _extract_text_from_message(self, message: types.Message):
         result = await self._extract_message_text(message)
