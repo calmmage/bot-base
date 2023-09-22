@@ -8,6 +8,7 @@ import loguru
 import openai
 import pydub
 import tiktoken
+from pydub import AudioSegment
 
 token_limit_by_model = {
     "gpt-3.5-turbo": 4096,
@@ -50,14 +51,14 @@ Audio = Union[pydub.AudioSegment, BytesIO, BinaryIO, str]
 
 
 def transcribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, (str, BytesIO, BinaryIO)):
-        audio = openai.Audio.from_file(audio)
+    if isinstance(audio, str):
+        audio = open(audio)
     return openai.Audio.transcribe(model, audio).text
 
 
 async def atranscribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, (str, BytesIO, BinaryIO)):
-        audio = openai.Audio.from_file(audio)
+    if isinstance(audio, str):
+        audio = open(audio)
     result = await openai.Audio.atranscribe(model, audio)
     return result.text
 
