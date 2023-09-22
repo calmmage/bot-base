@@ -1,12 +1,10 @@
 import json
-import os
 import re
-import tempfile
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import wraps
 from textwrap import dedent
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 from typing import Type, List, Dict
 
 import aiogram
@@ -17,10 +15,7 @@ from aiogram.filters import Command
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
-from bot_base.utils.telegram_utils import (
-    split_long_message,
-    MAX_TELEGRAM_MESSAGE_LENGTH,
-)
+from bot_base.utils.text_utils import MAX_TELEGRAM_MESSAGE_LENGTH, split_long_message
 
 if TYPE_CHECKING:
     from bot_base.core import App
@@ -35,12 +30,12 @@ class TelegramBotBase(ABC):
     def __init__(self, config: _config_class = None):
         if config is None:
             config = self._load_config()
-        self._config = config
+        self.config = config
 
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
-
+        token = config.token.get_secret_value()
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
-            token=config.token, parse_mode=ParseMode.MARKDOWN
+            token=token, parse_mode=ParseMode.MARKDOWN
         )
 
         # # All handlers should be attached to the Router (or Dispatcher)
@@ -50,15 +45,14 @@ class TelegramBotBase(ABC):
         load_dotenv()
         return self._config_class(**kwargs)
 
-    def register_command(self, handler, commands=None, description=None):
-        if commands is None:
-            # register a simple message handler
-            command_decorator = self._dp.message()
-        else:
-            self._commands.extend([(c, description) for c in commands])
-            command_decorator = self._dp.message(Command(commands=commands))
+    def register_command(self, handler, commands=None, description=None, filters=None):
+        if filters is None:
+            filters = ()
+        if isinstance(commands, str):
+            commands = [commands]
         self.logger.info(f"Registering command {commands}")
-        command_decorator(handler)
+        self._commands.extend([(c.lower(), description) for c in commands])
+        self._dp.message.register(handler, Command(commands=commands), *filters)
 
     _commands: List
 
@@ -68,7 +62,7 @@ class TelegramBotBase(ABC):
 
     NO_COMMAND_DESCRIPTION = "No description provided"
 
-    async def _set_bot_commands(self):
+    async def _set_aiogram_bot_commands(self):
         bot_commands = [
             types.BotCommand(command=c, description=d or self.NO_COMMAND_DESCRIPTION)
             for c, d in self.commands
@@ -77,12 +71,18 @@ class TelegramBotBase(ABC):
 
     @abstractmethod
     async def bootstrap(self):
-        pass
-        # super().bootstrap()
+        # todo: auto-add all commands marked with decorator
+        for commands, handler_name, description, filters in command_registry:
+            handler = self.__getattribute__(handler_name)
+            for command in commands:
+                # self._commands.append([command, description])
+                # self._dp.message.register(handler, Command(commands),
+                # *filters)
+                pass
 
     async def run(self) -> None:
         await self.bootstrap()
-        await self._set_bot_commands()
+        await self._set_aiogram_bot_commands()
 
         bot_name = (await self._aiogram_bot.get_me()).username
         bot_link = f"https://t.me/{bot_name}"
@@ -91,10 +91,26 @@ class TelegramBotBase(ABC):
         await self._dp.start_polling(self._aiogram_bot)
 
 
+command_registry = []
+
+
+Commands = Union[str, List[str]]
+
+
 # todo: use decorator to mark commands and parse automatically
-def mark_command(commands: List[str] = None, description: str = None):
+def mark_command(commands: Commands, description: str = None, filters: list = None):
+    if isinstance(commands, str):
+        commands = [commands]
+
     def wrapper(func):
-        func._command_description = dict(commands=commands, description=description)
+        command_registry.append(
+            dict(
+                commands=commands,
+                handler_name=func.__name__,
+                description=description,  # todo: use docstring
+                filters=filters or (),
+            )
+        )
 
         @wraps(func)
         def wrapped(*args, **kwargs):
@@ -137,6 +153,18 @@ class TelegramBot(TelegramBotBase):
         # todo: bonus: use gpt for help conversation
         raise NotImplementedError
 
+    def filter_unauthorised(self, message):
+        username = message.from_user.username
+        # self.logger.debug(f"checking user {username}")
+        # self.logger.debug(f"Allowed users:  {self._config.allowed_users}")
+        return username not in self.config.allowed_users
+
+    UNAUTHORISED_RESPONSE = dedent("You are not authorized to use this bot.")
+
+    async def unauthorized(self, message: types.Message):
+        self.logger.info(f"Unauthorized user {message.from_user.username}")
+        await message.answer(self.UNAUTHORISED_RESPONSE)
+
     async def chat_message_handler(self, message: types.Message):
         """
         Placeholder implementation of main chat message handler
@@ -152,7 +180,6 @@ class TelegramBot(TelegramBotBase):
 
             data = self._parse_message_text(message_text)
             response = f"Message parsed: {json.dumps(data, ensure_ascii=False)}"
-            # await message.answer(response)
             await self.send_safe(message.chat.id, response, message.message_id)
 
         return message_text
@@ -229,37 +256,43 @@ class TelegramBot(TelegramBotBase):
             result += message.caption
         # option 3: voice/video message
         if message.voice or message.audio:
-            # todo: accept voice message
-            # result += await self._process_voice_message(message.voice)
+            # todo: accept voice message? Seems to work
             result += await self._process_voice_message(message)
+        # todo: accept files?
+        if message.document and message.document.mime_type == "text/plain":
+            self.logger.info(f"Received text file: {message.document.file_name}")
+            file = await self._aiogram_bot.download(message.document.file_id)
+            content = file.read().decode("utf-8")
+            result += f"\n\n{content}"
+        # todo: accept video messages?
+        # if message.document:
+
         # option 4: content - only extract if explicitly asked?
         # support multi-message content extraction?
         # todo: ... if content_parsing_mode is enabled - parse content text
         return result
 
-    async def _process_voice_message(self, message):  # todo
+    async def _process_voice_message(self, message, parallel=None):
         # extract and parse message with whisper api
-        # todo: use app, not whisper directly
         # todo: use smart filters for voice messages?
         if message.audio:
             audio_file_id = message.audio.file_id
         else:
             audio_file_id = message.voice.file_id
 
-        # download the file
-        await message.answer(f"Downloading audio file from {audio_file_id}")
-        # audio_file = await message.bot.download_file_by_id(audio_url)
-        # self._aiogram_bot.download(audio_file, "temp.mp3")
+        file = await self._aiogram_bot.download(audio_file_id)
+        return await self.app.parse_audio(file, parallel=parallel)
 
-        audio_file = await self._aiogram_bot.get_file(audio_file_id)
+    async def _extract_text_from_message(self, message: types.Message):
+        result = await self._extract_message_text(message)
 
-        # Create a temporary directory to store the file
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_file_path = os.path.join(temp_dir, "temp_audio_file")
+        if message.reply_to_message:
+            self.logger.info(f"Detected reply message. Extracting text")
+            reply_text = await self._extract_message_text(message.reply_to_message)
+            self.logger.debug(f"Text extracted: {reply_text}")
+            result += f"\n\n{reply_text}"
 
-            await self._aiogram_bot.download(audio_file, destination=temp_file_path)
-
-            return await self.app.parse_audio(temp_file_path)
+        return result
 
     @mark_command(commands=["multistart"], description="Start multi-message mode")
     async def multi_message_start(self, message: types.Message):
@@ -302,18 +335,23 @@ class TelegramBot(TelegramBotBase):
             messages_text += await self._extract_message_text(message)
         return self._parse_message_text(messages_text)
 
-    async def send_safe(self, chat_id, text: str, reply_to_message_id=None):
+    async def send_safe(
+        self, chat_id, text: str, reply_to_message_id=None, filename=None
+    ):
         # todo: consider alternative: send as text file attachment
         # option 1: make a setting
         # option 2: if > 4096 - send as file
         # option 3: send as file + send start of text at the same time
+        # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 await self._aiogram_bot.send_message(
-                    chat_id, split_long_message(text)[0]
+                    chat_id,
+                    f"""Message is too long, sending as file. Preview: 
+                    {text[:500]}...""",
                 )
                 date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                filename = f"transcript_{date}.txt"
+                filename = f"{date}.txt"
                 await self._send_as_file(
                     chat_id,
                     text,
@@ -342,20 +380,21 @@ class TelegramBot(TelegramBotBase):
 
     @property
     def send_long_messages_as_files(self):
-        return self._config.send_long_messages_as_files
+        return self.config.send_long_messages_as_files
 
     async def bootstrap(self):
         # todo: simple message parsing
-        self.register_command(self.start, commands=["start"])
-        self.register_command(self.help, commands=["help"])
-        self.register_command(self.multi_message_start, commands=["multistart"])
-        self.register_command(self.multi_message_end, commands=["multiend"])
+        self.register_command(self.start, commands="start")
+        self.register_command(self.help, commands="help")
+        self._dp.message.register(self.unauthorized, self.filter_unauthorised)
+        self.register_command(self.multi_message_start, commands="multistart")
+        self.register_command(self.multi_message_end, commands="multiend")
 
-        if self._config.test_mode:
+        if self.config.test_mode:
             self.logger.debug("Running in test mode")
-            self.register_command(self.test_send_file, commands=["testfilesend"])
+            self.register_command(self.test_send_file, commands="testfilesend")
 
-        self.register_command(self.chat_message_handler)
+        self._dp.message.register(self.chat_message_handler)
 
     # -----------------------------------------------------
     # TEST MODE
