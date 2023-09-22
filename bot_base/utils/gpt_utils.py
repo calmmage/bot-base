@@ -1,15 +1,17 @@
 import asyncio
 import json
 from functools import partial
+from io import BytesIO
 from typing import Union
 
+import loguru
 import openai
 import pydub
 import tiktoken
 
 token_limit_by_model = {
-    "gpt-3.5-turbo": 8192,
-    "gpt-4": 4096,
+    "gpt-3.5-turbo": 4096,
+    "gpt-4": 8192,
     "gpt-3.5-turbo-16k": 16384,
 }
 
@@ -24,59 +26,119 @@ def get_token_count(text, model="gpt-3.5-turbo"):
     return len(enc.encode(text))
 
 
+# todo: add retry in case of error. Or at least handle gracefully
 def run_command_with_gpt(command: str, data: str, model="gpt-3.5-turbo"):
-    messages = [{"role": "user", "content": command}, {"role": "user", "content": data}]
+    messages = [
+        {"role": "system", "content": command},
+        {"role": "user", "content": data},
+    ]
     response = openai.ChatCompletion.create(messages=messages, model=model)
-    return response.choices[0].text
+    return response.choices[0].message.content
 
 
+# todo: if reason is length - continue generation
 async def arun_command_with_gpt(command: str, data: str, model="gpt-3.5-turbo"):
-    messages = [{"role": "user", "content": command}, {"role": "user", "content": data}]
+    messages = [
+        {"role": "system", "content": command},
+        {"role": "user", "content": data},
+    ]
     response = await openai.ChatCompletion.acreate(messages=messages, model=model)
-    return response.choices[0].text
+    return response.choices[0].message.content
 
 
-Audio = Union[pydub.AudioSegment, str]
+Audio = Union[pydub.AudioSegment, BytesIO, str]
 
 
 def transcribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, str):
+    if isinstance(audio, (str, BytesIO)):
         audio = openai.Audio.from_file(audio)
-    return openai.Audio.atranscribe(model, audio)
+    return openai.Audio.transcribe(model, audio).text
 
 
 async def atranscribe_audio(audio: Audio, model="whisper-1"):
-    if isinstance(audio, str):
+    if isinstance(audio, (str, BytesIO)):
         audio = openai.Audio.from_file(audio)
-    return await openai.Audio.atranscribe(model, audio)
+    result = await openai.Audio.atranscribe(model, audio)
+    return result.text
 
 
-def apply_command_recursively(command, chunks, model="gpt-3.5-turbo"):
+def default_merger(chunks, keyword="TEMPORARY_RESULT:"):
+    return "\n".join([f"{keyword}\n{chunk}" for chunk in chunks])
+
+
+def split_by_weight(items, weight_func, limit):
+    groups = []
+    group = []
+    group_weight = 0
+
+    for item in items:
+        item_weight = weight_func(item)
+        if group_weight + item_weight > limit:
+            if not group:
+                raise ValueError(
+                    f"Item {item} is too big to fit into a single group with limit {limit}"
+                )
+            groups.append(group)
+            group = []
+            group_weight = 0
+        group.append(item)
+        group_weight += item_weight
+
+    if group:  # If there are items left in the current group, append it to groups.
+        groups.append(group)
+
+    return groups
+
+
+async def apply_command_recursively(
+    command, chunks, model="gpt-3.5-turbo", merger=None, logger=None
+):
     """
     Apply GPT command recursively to the data
     """
-
-    # token_limit = token_limit_by_model[model]
+    if logger is None:
+        logger = loguru.logger
+    if merger is None:
+        merger = default_merger
+    token_limit = token_limit_by_model[model]
     while len(chunks) > 1:
-        # step 1: get token counts
-        token_counts = [get_token_count(chunk, model=model) for chunk in chunks]
-        # step 2: group chunks in groups up to the model token limit
-    raise NotImplementedError
+        groups = split_by_weight(
+            chunks, partial(get_token_count, model=model), token_limit
+        )
+        if len(groups) == len(chunks):
+            raise ValueError(
+                f"Chunk size is too big for model {model} with limit {token_limit}"
+            )
+        logger.debug(f"Split into {len(groups)} groups")
+        # apply merger
+        merged_chunks = map(merger, groups)
+        # apply command
+        chunks = await amap_gpt_command(merged_chunks, command, model=model)
+        logger.debug(f"Intermediate Result: {chunks}")
+
+    return chunks[0]
 
 
-def map_gpt_command(chunks, command, all_results=False):
+def map_gpt_command(
+    chunks, command, all_results=False, model="gpt-3.5-turbo", logger=None
+):
     """
     Run GPT command on each chunk one by one
     Accumulating temporary results and supplying them to the next chunk
     """
+    if logger is None:
+        logger = loguru.logger
+    logger.debug(f"Running command: {command}")
+
     temporary_results = None
     results = []
     for chunk in chunks:
         data = {"TEXT": chunk, "TEMPORARY_RESULTS": temporary_results}
         data_str = json.dumps(data, ensure_ascii=False)
-        temporary_results = run_command_with_gpt(command, data_str)
+        temporary_results = run_command_with_gpt(command, data_str, model=model)
         results.append(temporary_results)
 
+    logger.debug(f"Results: {results}")
     if all_results:
         return results
     else:
@@ -97,7 +159,7 @@ async def amap_gpt_command(chunks, command, model="gpt-3.5-turbo", merge=False):
     Run GPT command on each chunk in parallel
     Merge results if merge=True
     """
-    tasks = map(partial(arun_command_with_gpt, command=command, model=model), chunks)
+    tasks = [arun_command_with_gpt(command, chunk, model=model) for chunk in chunks]
 
     # Using asyncio.gather to collect all results
     completed_tasks = await asyncio.gather(*tasks)
