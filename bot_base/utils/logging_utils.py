@@ -38,22 +38,27 @@ def mongo_sink(message):
 DATA_CUTOFF = 100
 
 
-def custom_sink(message):
-    # Extract the record from the message
-    record = message.record
-
+def format_logging_message(record):
     # Check for the 'data' in the record's extra attribute
-    data = record.extra.get("data", None)
+    data = record["extra"].get("data", None)
+    level = record["level"]["name"]
+    message = record["message"]
 
     if data:
         truncated_data = data[:DATA_CUTOFF]  # Truncate the data to 100 symbols
         total_length = len(data)
-        print(
-            f"{record.level.name}: {record.message} - data (Total length: {total_length}): "
+        log_message = (
+            f"{level}: {message} - data (Total length: {total_length}): "
             f"{truncated_data}" + ("..." if total_length > DATA_CUTOFF else "")
         )
     else:
-        print(f"{record.level.name}: {record.message}")
+        log_message = f"{level}: {message}"
+
+    return log_message
+
+
+def custom_sink(message):
+    print(format_logging_message(message.record))
 
 
 logger_initialized = False
