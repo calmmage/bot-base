@@ -1,12 +1,9 @@
-from io import BytesIO
-
 import asyncio
+from io import BytesIO
 from typing import BinaryIO
 
 import loguru
-import pydub
 from pydub import AudioSegment
-from tqdm.auto import tqdm
 
 from bot_base.utils.gpt_utils import Audio, atranscribe_audio, transcribe_audio
 
@@ -15,8 +12,10 @@ DEFAULT_BUFFER = 5 * 1000
 
 
 def split_audio(
-    audio: pydub.AudioSegment, period=DEFAULT_PERIOD, buffer=DEFAULT_BUFFER, logger=None
+    audio: Audio, period=DEFAULT_PERIOD, buffer=DEFAULT_BUFFER, logger=None
 ):
+    if isinstance(audio, (str, BytesIO, BinaryIO)):
+        audio = AudioSegment.from_file(audio)
     if logger is None:
         logger = loguru.logger
     chunks = []
@@ -61,7 +60,7 @@ async def split_and_transcribe_audio(
         text_chunks = await asyncio.gather(*tasks)
     else:
         logger.info("Processing chunks sequentially")
-        text_chunks = [transcribe_audio(chunk) for chunk in tqdm(audio_chunks)]
+        text_chunks = [transcribe_audio(chunk) for chunk in audio_chunks]
 
     logger.info(f"Parsed audio: {text_chunks}")
     return text_chunks

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import re
+import subprocess
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import wraps
@@ -9,12 +11,14 @@ from typing import Type, List, Dict
 
 import aiogram
 import loguru
+import pyrogram
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
+from bot_base.utils import tools_dir
 from bot_base.utils.text_utils import MAX_TELEGRAM_MESSAGE_LENGTH, split_long_message
 
 if TYPE_CHECKING:
@@ -32,14 +36,31 @@ class TelegramBotBase(ABC):
             config = self._load_config()
         self.config = config
 
+        # from aiogram import Bot, Dispatcher
+        # from pyrogram import Client
+
+        loop = asyncio.get_event_loop()
+        asyncio.set_event_loop(loop)
+
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
         token = config.token.get_secret_value()
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
             token=token, parse_mode=ParseMode.MARKDOWN
         )
+        self.pyrogram_client = self._init_pyrogram_client()
 
         # # All handlers should be attached to the Router (or Dispatcher)
-        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
+        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(
+            bot=self._aiogram_bot, loop=loop
+        )
+
+    def _init_pyrogram_client(self):
+        return pyrogram.Client(
+            self.__class__.__name__,
+            api_id=self.config.api_id.get_secret_value(),
+            api_hash=self.config.api_hash.get_secret_value(),
+            bot_token=self.config.token.get_secret_value(),
+        )
 
     def _load_config(self, **kwargs):
         load_dotenv()
@@ -89,6 +110,39 @@ class TelegramBotBase(ABC):
         self.logger.info(f"Starting telegram bot at {bot_link}")
         # And the run events dispatching
         await self._dp.start_polling(self._aiogram_bot)
+
+    # todo: app.run(...)
+    # async def download_large_file(self, chat_id, message_id):
+    #     async with self.pyrogram_client as app:
+    #         message = await app.get_messages(chat_id, message_ids=message_id)
+    #         return await message.download(in_memory=True)
+
+    async def download_large_file(self, chat_id, message_id, target_path=None):
+        # todo: troubleshoot chat_id. Only username works for now.
+        script_path = tools_dir / "download_file_with_pyrogram.py"
+        # Construct command to run the download script
+        cmd = [
+            "python",
+            str(script_path),
+            "--chat-id",
+            str(chat_id),
+            "--message-id",
+            str(message_id),
+            "--token",
+            self.config.token.get_secret_value(),
+            "--api-id",
+            self.config.api_id.get_secret_value(),
+            "--api-hash",
+            self.config.api_hash.get_secret_value(),
+        ]
+
+        if target_path:
+            cmd.extend(["--target-path", target_path])
+        self.logger.debug(f"Running command: {' '.join(cmd)}")
+        # Run the command in a separate thread and await its result
+        result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+        file_path = result.stdout.strip().decode("utf-8")
+        return file_path
 
 
 command_registry = []
@@ -172,7 +226,9 @@ class TelegramBot(TelegramBotBase):
         Replace with your own implementation
         """
         message_text = await self._extract_message_text(message)
-        self.logger.info(f"Received message: {message_text}")
+        self.logger.info(
+            f"Received message", user=message.from_user.username, data=message_text
+        )
         if self._multi_message_mode:
             self.messages_stack.append(message)
         else:
@@ -230,18 +286,18 @@ class TelegramBot(TelegramBotBase):
         # if hashtag is recognized - parse it
         for hashtag in hashtags:
             if hashtag in self.recognized_hashtags:
-                self.logger.info(f"Recognized hashtag: {hashtag}")
+                self.logger.debug(f"Recognized hashtag: {hashtag}")
                 # todo: support combining multiple queues / tags
                 #  e.g. #idea #task -> queues = [ideas, tasks]
                 result.update(self.recognized_hashtags[hashtag])
             else:
-                self.logger.info(f"Custom hashtag: {hashtag}")
+                self.logger.debug(f"Custom hashtag: {hashtag}")
                 result[hashtag[1:]] = True
 
         # parse explicit keys like queue=...
         attributes = self.attribute_re.findall(text)
         for key, value in attributes:
-            self.logger.info(f"Recognized attribute: {key}={value}")
+            self.logger.debug(f"Recognized attribute: {key}={value}")
             result[key] = value
 
         return result
@@ -276,12 +332,24 @@ class TelegramBot(TelegramBotBase):
         # extract and parse message with whisper api
         # todo: use smart filters for voice messages?
         if message.audio:
-            audio_file_id = message.audio.file_id
+            self.logger.debug(f"Detected audio message")
+            file_desc = message.audio
+        elif message.voice:
+            self.logger.debug(f"Detected voice message")
+            file_desc = message.voice
         else:
-            audio_file_id = message.voice.file_id
+            raise ValueError("No audio file detected")
 
-        file = await self._aiogram_bot.download(audio_file_id)
+        file = await self.download_file(message, file_desc)
         return await self.app.parse_audio(file, parallel=parallel)
+
+    async def download_file(self, message: types.Message, file_desc):
+        if file_desc.file_size < 20 * 1024 * 1024:
+            return await self._aiogram_bot.download(file_desc.file_id)
+        else:
+            return await self.download_large_file(
+                message.chat.username, message.message_id
+            )
 
     async def _extract_text_from_message(self, message: types.Message):
         result = await self._extract_message_text(message)
@@ -289,7 +357,7 @@ class TelegramBot(TelegramBotBase):
         if message.reply_to_message:
             self.logger.info(f"Detected reply message. Extracting text")
             reply_text = await self._extract_message_text(message.reply_to_message)
-            self.logger.debug(f"Text extracted: {reply_text}")
+            self.logger.debug(f"Text extracted", data=reply_text)
             result += f"\n\n{reply_text}"
 
         return result
@@ -298,7 +366,9 @@ class TelegramBot(TelegramBotBase):
     async def multi_message_start(self, message: types.Message):
         # activate multi-message mode
         self._multi_message_mode = True
-        self.logger.info("Multi-message mode activated")
+        self.logger.info(
+            "Multi-message mode activated", user=message.from_user.username
+        )
         # todo: initiate timeout and if not deactivated - process messages
         #  automatically
 
@@ -306,10 +376,16 @@ class TelegramBot(TelegramBotBase):
     async def multi_message_end(self, message: types.Message):
         # deactivate multi-message mode and process content
         self._multi_message_mode = False
-        self.logger.info("Multi-message mode deactivated. Processing messages")
+        self.logger.info(
+            "Multi-message mode deactivated. Processing messages",
+            user=message.from_user.username,
+            data=str(self.messages_stack),
+        )
         response = await self.process_messages_stack()
         await message.answer(response)
-        self.logger.info("Messages processed")  # todo: report results / link
+        self.logger.info(
+            "Messages processed", user=message.from_user.username
+        )  # todo: report results / link
 
     async def process_messages_stack(self):
         """
@@ -338,20 +414,18 @@ class TelegramBot(TelegramBotBase):
     async def send_safe(
         self, chat_id, text: str, reply_to_message_id=None, filename=None
     ):
-        # todo: consider alternative: send as text file attachment
-        # option 1: make a setting
-        # option 2: if > 4096 - send as file
-        # option 3: send as file + send start of text at the same time
         # todo: add 3 send modes - always text, always file, auto
+        if filename is None:
+            filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 await self._aiogram_bot.send_message(
                     chat_id,
-                    f"""Message is too long, sending as file. Preview: 
+                    f"""Message is too long, sending as file {filename} 
+                    Preview: 
                     {text[:500]}...""",
                 )
-                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                filename = f"{date}.txt"
+
                 await self._send_as_file(
                     chat_id,
                     text,
@@ -359,8 +433,9 @@ class TelegramBot(TelegramBotBase):
                     filename=filename,
                 )
             else:
+                message_text = f"""{filename} {text}"""
                 await self._aiogram_bot.send_message(
-                    chat_id, text, reply_to_message_id=reply_to_message_id
+                    chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
         else:
             for chunk in split_long_message(text):
