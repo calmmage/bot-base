@@ -1,8 +1,11 @@
 import asyncio
 import json
+import pprint
 import re
 import subprocess
+import traceback
 from abc import ABC, abstractmethod
+from collections import defaultdict, deque
 from datetime import datetime
 from functools import wraps
 from textwrap import dedent
@@ -12,6 +15,7 @@ from typing import Type, List, Dict
 import aiogram
 import loguru
 import pyrogram
+from aiogram import F
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -19,7 +23,11 @@ from dotenv import load_dotenv
 
 from bot_base.core import TelegramBotConfig
 from bot_base.utils import tools_dir
-from bot_base.utils.text_utils import MAX_TELEGRAM_MESSAGE_LENGTH, split_long_message
+from bot_base.utils.text_utils import (
+    MAX_TELEGRAM_MESSAGE_LENGTH,
+    split_long_message,
+    escape_md,
+)
 
 if TYPE_CHECKING:
     from bot_base.core import App
@@ -141,6 +149,9 @@ class TelegramBotBase(ABC):
         self.logger.debug(f"Running command: {' '.join(cmd)}")
         # Run the command in a separate thread and await its result
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+        err = result.stderr.strip().decode("utf-8")
+        if "ERROR" in err:
+            raise Exception(err)
         file_path = result.stdout.strip().decode("utf-8")
         return file_path
 
@@ -182,8 +193,10 @@ class TelegramBot(TelegramBotBase):
         super().__init__(config)
         self.app = app
 
-        self._multi_message_mode = False
-        self.messages_stack = []
+        # todo: rework to multi-chat state
+        self._multi_message_mode = defaultdict(bool)
+        self.messages_stack = defaultdict(list)
+        self.errors = defaultdict(lambda: deque(maxlen=128))
 
     async def start(self, message: types.Message):
         response = dedent(
@@ -239,6 +252,41 @@ class TelegramBot(TelegramBotBase):
             await self.send_safe(message.chat.id, response, message.message_id)
 
         return message_text
+
+    async def error_handler(self, event: types.ErrorEvent, message: types.Message):
+        # Get chat ID from the message. This will vary depending on the library/framework you're using.
+        chat_id = message.chat.id
+        error_data = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+            "error": str(event.exception),
+            "traceback": traceback.format_exc(),
+        }
+        self.errors[chat_id].append(error_data)
+
+        # Respond to the user
+        await message.answer(
+            "Oops, something went wrong! Use /error command if you want details"
+        )
+
+    async def error_command_handler(self, message: types.Message):
+        chat_id = message.chat.id
+        errors = self.errors[chat_id]
+        if errors:
+            error = errors[-1]
+            error_message = pprint.pformat(error)
+            filename = f"error_message_{error['timestamp']}.txt"
+        else:
+            error_message = "No recent error message captured"
+            filename = ""
+        await self.send_safe(
+            chat_id,
+            error_message,
+            message.message_id,
+            filename=filename,
+            escape_markdown=True,
+        )
+
+    # ------------------------------------------------------------
 
     def _parse_message_text(self, message_text: str) -> dict:
         result = {}
@@ -365,7 +413,8 @@ class TelegramBot(TelegramBotBase):
     @mark_command(commands=["multistart"], description="Start multi-message mode")
     async def multi_message_start(self, message: types.Message):
         # activate multi-message mode
-        self._multi_message_mode = True
+        chat_id = message.chat.id
+        self._multi_message_mode[chat_id] = True
         self.logger.info(
             "Multi-message mode activated", user=message.from_user.username
         )
@@ -375,55 +424,71 @@ class TelegramBot(TelegramBotBase):
     @mark_command(commands=["multiend"], description="End multi-message mode")
     async def multi_message_end(self, message: types.Message):
         # deactivate multi-message mode and process content
-        self._multi_message_mode = False
+        chat_id = message.chat.id
+        self._multi_message_mode[chat_id] = False
         self.logger.info(
             "Multi-message mode deactivated. Processing messages",
             user=message.from_user.username,
             data=str(self.messages_stack),
         )
-        response = await self.process_messages_stack()
+        response = await self.process_messages_stack(chat_id)
         await message.answer(response)
         self.logger.info(
-            "Messages processed", user=message.from_user.username
-        )  # todo: report results / link
+            "Messages processed", user=message.from_user.username, data=response
+        )
 
-    async def process_messages_stack(self):
+    async def process_messages_stack(self, chat_id):
         """
         This is a placeholder implementation to demonstrate the feature
         :return:
         """
-        data = await self._extract_stacked_messages_data()
+        data = await self._extract_stacked_messages_data(chat_id)
         response = f"Message parsed: {json.dumps(data)}"
 
         self.logger.info(f"Messages processed, clearing stack")
-        self.messages_stack = []
+        self.messages_stack[chat_id] = []
         return response
 
-    async def _extract_stacked_messages_data(self):
+    async def _extract_stacked_messages_data(self, chat_id):
         if len(self.messages_stack) == 0:
             self.logger.info("No messages to process")
             return
-        self.logger.info(f"Processing {len(self.messages_stack)} messages")
+        self.logger.info(f"Processing {len(self.messages_stack[chat_id])} messages")
         messages_text = ""
-        for message in self.messages_stack:
+        for message in self.messages_stack[chat_id]:
             # todo: parse message content one by one.
             #  to support parsing of the videos and other applied modifiers
             messages_text += await self._extract_message_text(message)
         return self._parse_message_text(messages_text)
 
+    preview_cutoff = 500
+
     async def send_safe(
-        self, chat_id, text: str, reply_to_message_id=None, filename=None
+        self,
+        chat_id,
+        text: str,
+        reply_to_message_id=None,
+        filename=None,
+        escape_markdown=False,
     ):
         # todo: add 3 send modes - always text, always file, auto
-        if filename is None:
-            filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
+                if filename is None:
+                    filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+                preview = text[: self.preview_cutoff]
+                if escape_markdown:
+                    preview = escape_md(preview)
                 await self._aiogram_bot.send_message(
                     chat_id,
-                    f"""Message is too long, sending as file {filename} 
-                    Preview: 
-                    {text[:500]}...""",
+                    dedent(
+                        f"""
+                        Message is too long, sending as file {escape_md(filename)} 
+                        Preview: 
+                        """
+                    )
+                    + preview
+                    + "...",
                 )
 
                 await self._send_as_file(
@@ -433,12 +498,18 @@ class TelegramBot(TelegramBotBase):
                     filename=filename,
                 )
             else:
-                message_text = f"""{filename} {text}"""
+                message_text = text
+                if escape_markdown:
+                    message_text = escape_md(text)
+                if filename:
+                    message_text = escape_md(filename) + message_text
                 await self._aiogram_bot.send_message(
                     chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
         else:
             for chunk in split_long_message(text):
+                if escape_markdown:
+                    chunk = escape_md(chunk)
                 await self._aiogram_bot.send_message(
                     chat_id, chunk, reply_to_message_id=reply_to_message_id
                 )
@@ -458,9 +529,11 @@ class TelegramBot(TelegramBotBase):
         return self.config.send_long_messages_as_files
 
     async def bootstrap(self):
+        self._dp.error.register(self.error_handler, F.update.message.as_("message"))
         # todo: simple message parsing
         self.register_command(self.start, commands="start")
         self.register_command(self.help, commands="help")
+        self.register_command(self.error_command_handler, commands="error")
         self._dp.message.register(self.unauthorized, self.filter_unauthorised)
         self.register_command(self.multi_message_start, commands="multistart")
         self.register_command(self.multi_message_end, commands="multiend")
@@ -468,6 +541,7 @@ class TelegramBot(TelegramBotBase):
         if self.config.test_mode:
             self.logger.debug("Running in test mode")
             self.register_command(self.test_send_file, commands="testfilesend")
+            self.register_command(self.test_error_handler, commands="testerror")
 
         self._dp.message.register(self.chat_message_handler)
 
@@ -477,3 +551,7 @@ class TelegramBot(TelegramBotBase):
     async def test_send_file(self, message: types.Message):
         self.logger.debug("Received testfilesend command")
         await self._send_as_file(message.chat.id, "test text", message.message_id)
+
+    async def test_error_handler(self, message: types.Message):
+        self.logger.debug("Received testerror command")
+        raise Exception("TestError")

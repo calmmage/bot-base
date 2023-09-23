@@ -1,3 +1,5 @@
+import re
+
 MAX_TELEGRAM_MESSAGE_LENGTH = 4096
 
 
@@ -15,3 +17,11 @@ def split_long_message(text, max_length=MAX_TELEGRAM_MESSAGE_LENGTH, sep="\n"):
     if text:
         chunks.append(text)  # add the remaining text as the last chunk
     return chunks
+
+
+escape_re = re.compile(r"[_*[\]~`#]")
+
+
+def escape_md(text: str) -> str:
+    """Escape markdown special characters in the text."""
+    return escape_re.sub(r"\\\g<0>", text)
