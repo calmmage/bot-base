@@ -1,4 +1,5 @@
 import os
+import sys
 
 import loguru
 import mongoengine
@@ -37,28 +38,33 @@ def mongo_sink(message):
 
 DATA_CUTOFF = 100
 
-
-def format_logging_message(record):
-    # Check for the 'data' in the record's extra attribute
-    data = record["extra"].get("data", None)
-    level = record["level"].name
-    message = record["message"]
-
-    if data:
-        truncated_data = data[:DATA_CUTOFF]  # Truncate the data to 100 symbols
-        total_length = len(data)
-        log_message = (
-            f"{level}: {message} - data (Total length: {total_length}): "
-            f"{truncated_data}" + ("..." if total_length > DATA_CUTOFF else "")
-        )
-    else:
-        log_message = f"{level}: {message}"
-
-    return log_message
+# Customized formatter
+custom_formatter = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+    "<level>{message}</level> | "
+    "<yellow>Data (Total length: {extra[data_length]}):</yellow> "
+    "<level>{extra[truncated_data]}</level>"
+)
 
 
-def custom_sink(message):
-    print(format_logging_message(message.record))
+def data_filter(record):
+    if "data" not in record["extra"]:
+        return False
+    data = record["extra"]["data"]
+    total_length = len(data)
+    truncated_data = data[:DATA_CUTOFF]
+    truncated_data += "..." if total_length > DATA_CUTOFF else ""
+
+    # Add these to the record so they can be used in the formatter
+    record["extra"]["data_length"] = total_length
+    record["extra"]["truncated_data"] = truncated_data
+
+    return True  # Allow the log message to be processed further
+
+
+def no_data_filter(record):
+    return "data" not in record["extra"]
 
 
 logger_initialized = False
@@ -96,7 +102,10 @@ def setup_logger(
     if log_to_stderr is None:
         log_to_stderr = os.getenv("LOG_TO_STDERR", True)
     if log_to_stderr:
-        logger.add(custom_sink, level="DEBUG")
+        logger.add(sys.stderr, level="DEBUG", filter=no_data_filter)
+        logger.add(
+            sys.stderr, level="DEBUG", filter=data_filter, format=custom_formatter
+        )
 
     if log_to_file is None:
         log_to_file = os.getenv("LOG_TO_FILE", False)

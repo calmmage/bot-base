@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.2.7"
+version = "0.2.9"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
@@ -13,7 +13,7 @@ openai = "^0.28.0"
 loguru = "^0.7.2"
 mongoengine = "^0.27.0"
 pydub = "^0.25.1"
-aiogram = "^3.0.0"
+aiogram = "*"
 tiktoken = "*"
 pyrogram = "^2.0.106"
 tgcrypto = "^1.2.5"
