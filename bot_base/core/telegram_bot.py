@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import pprint
 import re
 import subprocess
@@ -8,6 +9,9 @@ from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from datetime import datetime
 from functools import wraps
+from io import BytesIO
+from pathlib import Path
+from tempfile import mkstemp
 from textwrap import dedent
 from typing import TYPE_CHECKING, Union
 from typing import Type, List, Dict
@@ -39,28 +43,29 @@ if TYPE_CHECKING:
 class TelegramBotBase(ABC):
     _config_class: Type[TelegramBotConfig] = TelegramBotConfig
 
-    def __init__(self, config: _config_class = None):
+    def __init__(self, config: _config_class = None, app_data="./app_data"):
+        self.app_data = Path(app_data)
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
+
         if config is None:
             config = self._load_config()
         self.config = config
 
-        # from aiogram import Bot, Dispatcher
-        # from pyrogram import Client
-
-        loop = asyncio.get_event_loop()
-        asyncio.set_event_loop(loop)
-
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
         token = config.token.get_secret_value()
+
+        # Pyrogram
+        self.pyrogram_client = self._init_pyrogram_client()
+
+        # aiogram
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
             token=token, parse_mode=ParseMode.MARKDOWN
         )
-        self.pyrogram_client = self._init_pyrogram_client()
+        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
 
-        # # All handlers should be attached to the Router (or Dispatcher)
-        self._dp: aiogram.Dispatcher = aiogram.Dispatcher(
-            bot=self._aiogram_bot, loop=loop
-        )
+    @property
+    def downloads_dir(self):
+        return self.app_data / "downloads"
 
     def _init_pyrogram_client(self):
         return pyrogram.Client(
@@ -128,6 +133,7 @@ class TelegramBotBase(ABC):
     async def download_large_file(self, chat_id, message_id, target_path=None):
         # todo: troubleshoot chat_id. Only username works for now.
         script_path = tools_dir / "download_file_with_pyrogram.py"
+
         # Construct command to run the download script
         cmd = [
             "python",
@@ -146,6 +152,9 @@ class TelegramBotBase(ABC):
 
         if target_path:
             cmd.extend(["--target-path", target_path])
+        else:
+            _, file_path = mkstemp(dir=self.downloads_dir)
+            cmd.extend(["--target-path", file_path])
         self.logger.debug(f"Running command: {' '.join(cmd)}")
         # Run the command in a separate thread and await its result
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
@@ -153,6 +162,12 @@ class TelegramBotBase(ABC):
         if "ERROR" in err:
             raise Exception(err)
         file_path = result.stdout.strip().decode("utf-8")
+        self.logger.debug(f"{result.stdout=}\n\n{result.stderr=}")
+        if target_path is None:
+            file_data = BytesIO(open(file_path, "rb").read())
+            # remove file
+            os.unlink(file_path)
+            return file_data
         return file_path
 
 
@@ -391,12 +406,14 @@ class TelegramBot(TelegramBotBase):
         file = await self.download_file(message, file_desc)
         return await self.app.parse_audio(file, parallel=parallel)
 
-    async def download_file(self, message: types.Message, file_desc):
+    async def download_file(self, message: types.Message, file_desc, file_path=None):
         if file_desc.file_size < 20 * 1024 * 1024:
-            return await self._aiogram_bot.download(file_desc.file_id)
+            return await self._aiogram_bot.download(
+                file_desc.file_id, destination=file_path
+            )
         else:
             return await self.download_large_file(
-                message.chat.username, message.message_id
+                message.chat.username, message.message_id, target_path=file_path
             )
 
     async def _extract_text_from_message(self, message: types.Message):
