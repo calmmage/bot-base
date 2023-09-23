@@ -130,8 +130,20 @@ class TelegramBotBase(ABC):
     #         message = await app.get_messages(chat_id, message_ids=message_id)
     #         return await message.download(in_memory=True)
 
+    def _check_pyrogram_tokens(self):
+        if not (
+            self.config.api_id.get_secret_value()
+            and self.config.api_hash.get_secret_value()
+        ):
+            raise ValueError(
+                "Telegram api_id and api_hash must be provided for Pyrogram "
+                "to download large files"
+            )
+
     async def download_large_file(self, chat_id, message_id, target_path=None):
         # todo: troubleshoot chat_id. Only username works for now.
+        self._check_pyrogram_tokens()
+
         script_path = tools_dir / "download_file_with_pyrogram.py"
 
         # Construct command to run the download script
@@ -165,7 +177,6 @@ class TelegramBotBase(ABC):
         self.logger.debug(f"{result.stdout=}\n\n{result.stderr=}")
         if target_path is None:
             file_data = BytesIO(open(file_path, "rb").read())
-            # remove file
             os.unlink(file_path)
             return file_data
         return file_path
