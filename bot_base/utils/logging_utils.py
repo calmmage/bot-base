@@ -41,7 +41,7 @@ DATA_CUTOFF = 100
 def format_logging_message(record):
     # Check for the 'data' in the record's extra attribute
     data = record["extra"].get("data", None)
-    level = record["level"]["name"]
+    level = record["level"].name
     message = record["message"]
 
     if data:

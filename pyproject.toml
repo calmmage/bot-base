@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.2.6"
+version = "0.2.7"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
@@ -26,6 +26,7 @@ pytest = "^7.4.2"
 pytest-mongodb = "^2.4.0"
 aiogram-tests = "^1.0.3"
 black = "*"
+easydict = "^1.10"
 
 [build-system]
 requires = ["poetry-core"]
