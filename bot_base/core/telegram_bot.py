@@ -226,7 +226,9 @@ class TelegramBot(TelegramBotBase):
         Replace with your own implementation
         """
         message_text = await self._extract_message_text(message)
-        self.logger.info(f"Received message: {message_text}")
+        self.logger.info(
+            f"Received message", user=message.from_user.username, data=message_text
+        )
         if self._multi_message_mode:
             self.messages_stack.append(message)
         else:
@@ -284,18 +286,18 @@ class TelegramBot(TelegramBotBase):
         # if hashtag is recognized - parse it
         for hashtag in hashtags:
             if hashtag in self.recognized_hashtags:
-                self.logger.info(f"Recognized hashtag: {hashtag}")
+                self.logger.debug(f"Recognized hashtag: {hashtag}")
                 # todo: support combining multiple queues / tags
                 #  e.g. #idea #task -> queues = [ideas, tasks]
                 result.update(self.recognized_hashtags[hashtag])
             else:
-                self.logger.info(f"Custom hashtag: {hashtag}")
+                self.logger.debug(f"Custom hashtag: {hashtag}")
                 result[hashtag[1:]] = True
 
         # parse explicit keys like queue=...
         attributes = self.attribute_re.findall(text)
         for key, value in attributes:
-            self.logger.info(f"Recognized attribute: {key}={value}")
+            self.logger.debug(f"Recognized attribute: {key}={value}")
             result[key] = value
 
         return result
@@ -355,7 +357,7 @@ class TelegramBot(TelegramBotBase):
         if message.reply_to_message:
             self.logger.info(f"Detected reply message. Extracting text")
             reply_text = await self._extract_message_text(message.reply_to_message)
-            self.logger.debug(f"Text extracted: {reply_text}")
+            self.logger.debug(f"Text extracted", data=reply_text)
             result += f"\n\n{reply_text}"
 
         return result
@@ -364,7 +366,9 @@ class TelegramBot(TelegramBotBase):
     async def multi_message_start(self, message: types.Message):
         # activate multi-message mode
         self._multi_message_mode = True
-        self.logger.info("Multi-message mode activated")
+        self.logger.info(
+            "Multi-message mode activated", user=message.from_user.username
+        )
         # todo: initiate timeout and if not deactivated - process messages
         #  automatically
 
@@ -372,10 +376,16 @@ class TelegramBot(TelegramBotBase):
     async def multi_message_end(self, message: types.Message):
         # deactivate multi-message mode and process content
         self._multi_message_mode = False
-        self.logger.info("Multi-message mode deactivated. Processing messages")
+        self.logger.info(
+            "Multi-message mode deactivated. Processing messages",
+            user=message.from_user.username,
+            data=str(self.messages_stack),
+        )
         response = await self.process_messages_stack()
         await message.answer(response)
-        self.logger.info("Messages processed")  # todo: report results / link
+        self.logger.info(
+            "Messages processed", user=message.from_user.username
+        )  # todo: report results / link
 
     async def process_messages_stack(self):
         """
@@ -404,20 +414,18 @@ class TelegramBot(TelegramBotBase):
     async def send_safe(
         self, chat_id, text: str, reply_to_message_id=None, filename=None
     ):
-        # todo: consider alternative: send as text file attachment
-        # option 1: make a setting
-        # option 2: if > 4096 - send as file
-        # option 3: send as file + send start of text at the same time
         # todo: add 3 send modes - always text, always file, auto
+        if filename is None:
+            filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 await self._aiogram_bot.send_message(
                     chat_id,
-                    f"""Message is too long, sending as file. Preview: 
+                    f"""Message is too long, sending as file {filename} 
+                    Preview: 
                     {text[:500]}...""",
                 )
-                date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                filename = f"{date}.txt"
+
                 await self._send_as_file(
                     chat_id,
                     text,
@@ -425,8 +433,9 @@ class TelegramBot(TelegramBotBase):
                     filename=filename,
                 )
             else:
+                message_text = f"""{filename} {text}"""
                 await self._aiogram_bot.send_message(
-                    chat_id, text, reply_to_message_id=reply_to_message_id
+                    chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
         else:
             for chunk in split_long_message(text):

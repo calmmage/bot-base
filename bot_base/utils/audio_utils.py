@@ -4,7 +4,6 @@ from typing import BinaryIO
 
 import loguru
 from pydub import AudioSegment
-from tqdm.auto import tqdm
 
 from bot_base.utils.gpt_utils import Audio, atranscribe_audio, transcribe_audio
 
@@ -61,7 +60,7 @@ async def split_and_transcribe_audio(
         text_chunks = await asyncio.gather(*tasks)
     else:
         logger.info("Processing chunks sequentially")
-        text_chunks = [transcribe_audio(chunk) for chunk in tqdm(audio_chunks)]
+        text_chunks = [transcribe_audio(chunk) for chunk in audio_chunks]
 
     logger.info(f"Parsed audio: {text_chunks}")
     return text_chunks
