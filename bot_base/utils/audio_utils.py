@@ -7,7 +7,12 @@ import loguru
 import tqdm
 from pydub import AudioSegment
 
-from bot_base.utils.gpt_utils import Audio, atranscribe_audio, transcribe_audio
+from bot_base.utils.gpt_utils import (
+    Audio,
+    atranscribe_audio,
+    transcribe_audio,
+    WHISPER_RATE_LIMIT,
+)
 
 DEFAULT_PERIOD = 120 * 1000
 DEFAULT_BUFFER = 5 * 1000
@@ -23,6 +28,10 @@ def split_audio(
         logger = loguru.logger
     chunks = []
     s = 0
+
+    if len(audio) / period > WHISPER_RATE_LIMIT - 5:
+        period = len(audio) // (WHISPER_RATE_LIMIT - 5)
+
     logger.debug(f"Splitting audio into chunks")
     while s + period < len(audio):
         chunks.append(audio[s : s + period])
@@ -70,5 +79,5 @@ async def split_and_transcribe_audio(
         for chunk in tqdm.std.tqdm(audio_chunks):
             text_chunks.append(transcribe_audio(chunk))
 
-    logger.info(f"Parsed audio", data=pprint.pformat(text_chunks))
+    logger.debug(f"Parsed audio", data=pprint.pformat(text_chunks))
     return text_chunks

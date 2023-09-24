@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.2.10"
+version = "0.2.12"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
@@ -17,6 +17,7 @@ aiogram = "*"
 tiktoken = "*"
 pyrogram = "^2.0.106"
 tgcrypto = "^1.2.5"
+aiolimiter = "^1.1.0"
 
 
 [tool.poetry.group.dev.dependencies]
