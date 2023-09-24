@@ -8,7 +8,15 @@ import loguru
 import openai
 import pydub
 import tiktoken
-from pydub import AudioSegment
+from aiolimiter import AsyncLimiter
+
+WHISPER_RATE_LIMIT = 50  # 50 requests per minute
+whisper_limiter = AsyncLimiter(WHISPER_RATE_LIMIT, 60)  # 50 requests per minute
+GPT_RATE_LIMIT = 200  # 200 requests per minute
+gpt_limiter = AsyncLimiter(GPT_RATE_LIMIT, 60)  # 200 requests per minute
+
+
+# Then use atranscribe_audio_limited instead of atranscribe_audio
 
 token_limit_by_model = {
     "gpt-3.5-turbo": 4096,
@@ -43,7 +51,8 @@ async def arun_command_with_gpt(command: str, data: str, model="gpt-3.5-turbo"):
         {"role": "system", "content": command},
         {"role": "user", "content": data},
     ]
-    response = await openai.ChatCompletion.acreate(messages=messages, model=model)
+    async with gpt_limiter:
+        response = await openai.ChatCompletion.acreate(messages=messages, model=model)
     return response.choices[0].message.content
 
 
@@ -59,7 +68,8 @@ def transcribe_audio(audio: Audio, model="whisper-1"):
 async def atranscribe_audio(audio: Audio, model="whisper-1"):
     if isinstance(audio, str):
         audio = open(audio)
-    result = await openai.Audio.atranscribe(model, audio)
+    async with whisper_limiter:
+        result = await openai.Audio.atranscribe(model, audio)
     return result.text
 
 
