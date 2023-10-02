@@ -38,6 +38,19 @@ if TYPE_CHECKING:
     from bot_base.core import App
 
 
+def admin(func):
+    # todo: implement properly
+    # @wraps(func)
+    # async def wrapped(self, message: types.Message):
+    #     if message.from_user.username not in self.config.admins:
+    #         self.logger.info(f"Unauthorized user {message.from_user.username}")
+    #         await message.answer(self.UNAUTHORISED_RESPONSE)
+    #         return
+    #     return await func(self, message)
+    #
+    # return wrapped
+    return func
+
 # todo: find and use simple_command decorator that parses the incoming
 #  message and passes the parsed data to the handler, then sends the result
 #  back to the user
@@ -51,6 +64,8 @@ class TelegramBotBase(ABC):
         if config is None:
             config = self._load_config()
         self.config = config
+
+        self.start_time = datetime.now()
 
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
         token = config.token.get_secret_value()
@@ -492,7 +507,7 @@ class TelegramBot(TelegramBotBase):
             messages_text += await self._extract_message_text(message)
         return self._parse_message_text(messages_text)
 
-    preview_cutoff = 500
+    PREVIEW_CUTOFF = 500
 
     async def send_safe(
         self,
@@ -506,13 +521,13 @@ class TelegramBot(TelegramBotBase):
         if wrap:
             lines = text.split('\n')
             new_lines = [textwrap.fill(line, width=88) for line in lines]
-            text = '\n'.join(new_lines[:self.preview_cutoff])
+            text = '\n'.join(new_lines[:self.PREVIEW_CUTOFF])
         # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 if filename is None:
                     filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
-                preview = text[: self.preview_cutoff]
+                preview = text[: self.PREVIEW_CUTOFF]
                 if escape_markdown:
                     preview = escape_md(preview)
                 await self._aiogram_bot.send_message(
@@ -579,6 +594,9 @@ class TelegramBot(TelegramBotBase):
             self.register_command(self.test_send_file, commands="testfilesend")
             self.register_command(self.test_error_handler, commands="testerror")
 
+        # admin commands
+        self.register_command(self.uptime, commands="uptime")
+
         self._dp.message.register(self.chat_message_handler)
 
     # -----------------------------------------------------
@@ -591,3 +609,13 @@ class TelegramBot(TelegramBotBase):
     async def test_error_handler(self, message: types.Message):
         self.logger.debug("Received testerror command")
         raise Exception("TestError")
+
+    @admin
+    @mark_command(commands="uptime", description="Show bot uptime")
+    async def uptime(self, message: types.Message):
+        uptime = datetime.now() - self.start_time
+        # await message.answer(f"Uptime: {uptime}")
+        # todo: format uptime as human-readable string
+        # e.g. 1 day, 2 hours, 3 minutes, 4 seconds
+        # this is the code:
+        await message.answer(f"Uptime: {uptime}")
