@@ -504,7 +504,9 @@ class TelegramBot(TelegramBotBase):
         wrap=True
     ):
         if wrap:
-            text = textwrap.fill(text, width=88)
+            lines = text.split('\n')
+            new_lines = [textwrap.fill(line, width=88) for line in lines]
+            text = '\n'.join(new_lines[:self.preview_cutoff])
         # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:

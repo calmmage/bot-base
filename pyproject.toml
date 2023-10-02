@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.2.14"
+version = "0.2.15"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
