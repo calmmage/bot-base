@@ -498,7 +498,10 @@ class TelegramBot(TelegramBotBase):
         reply_to_message_id=None,
         filename=None,
         escape_markdown=False,
+        pformat=True
     ):
+        if pformat:
+            text = "\n".join(pprint.pformat(text))
         # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
@@ -530,7 +533,7 @@ class TelegramBot(TelegramBotBase):
                 if escape_markdown:
                     message_text = escape_md(text)
                 if filename:
-                    message_text = escape_md(filename) + message_text
+                    message_text = escape_md(filename) + '\n' + message_text
                 await self._aiogram_bot.send_message(
                     chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
