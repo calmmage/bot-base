@@ -4,6 +4,7 @@ import os
 import pprint
 import re
 import subprocess
+import textwrap
 import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
@@ -310,6 +311,7 @@ class TelegramBot(TelegramBotBase):
             message.message_id,
             filename=filename,
             escape_markdown=True,
+            wrap=False
         )
 
     # ------------------------------------------------------------
@@ -387,7 +389,8 @@ class TelegramBot(TelegramBotBase):
         # option 3: voice/video message
         if message.voice or message.audio:
             # todo: accept voice message? Seems to work
-            result += await self._process_voice_message(message)
+            chunks = await self._process_voice_message(message)
+            result += "\n\n".join(chunks)
         # todo: accept files?
         if message.document and message.document.mime_type == "text/plain":
             self.logger.info(f"Received text file: {message.document.file_name}")
@@ -498,7 +501,10 @@ class TelegramBot(TelegramBotBase):
         reply_to_message_id=None,
         filename=None,
         escape_markdown=False,
+        wrap=True
     ):
+        if wrap:
+            text = textwrap.fill(text, width=88)
         # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
@@ -530,7 +536,7 @@ class TelegramBot(TelegramBotBase):
                 if escape_markdown:
                     message_text = escape_md(text)
                 if filename:
-                    message_text = escape_md(filename) + message_text
+                    message_text = escape_md(filename) + '\n' + message_text
                 await self._aiogram_bot.send_message(
                     chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
