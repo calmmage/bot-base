@@ -1,3 +1,6 @@
+from typing import Optional
+
+from aiogram.enums import ParseMode
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
@@ -19,6 +22,10 @@ class TelegramBotConfig(BaseSettings):
     send_long_messages_as_files: bool = True
     test_mode: bool = False
     allowed_users: list = []
+    dev_message_timeout: int = 5 * 60  # dev message cleanup after 5 minutes
+
+    parse_mode: Optional[ParseMode] = None
+    send_preview_for_long_messages: bool = False
 
     model_config = {
         "env_prefix": "TELEGRAM_BOT_",
@@ -28,5 +35,10 @@ class TelegramBotConfig(BaseSettings):
 class AppConfig(BaseSettings):
     database: DatabaseConfig = DatabaseConfig()
     telegram_bot: TelegramBotConfig = TelegramBotConfig()
+    # todo: support missing api key
     openai_api_key: SecretStr
     process_audio_in_parallel: bool = False
+
+    # todo: add extra {APP}_ prefix to all env vars?
+    #  will this work?
+    #  "env_prefix": "{APP}_TELEGRAM_BOT_",

@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.2.16"
+version = "0.2.17"
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-pydantic = "*"
+pydantic = "2.*"
 pydantic-settings = "^2.0.3"
 openai = "^0.28.0"
 loguru = "^0.7.2"
