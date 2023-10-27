@@ -14,7 +14,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import mkstemp
 from textwrap import dedent
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Union, Optional
 from typing import Type, List, Dict
 
 import aiogram
@@ -22,6 +22,7 @@ import loguru
 import pyrogram
 from aiogram import F
 from aiogram import types
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -36,6 +37,13 @@ from bot_base.utils.text_utils import (
 
 if TYPE_CHECKING:
     from bot_base.core import App
+
+
+class CommandRegistryItem(BaseModel):
+    commands: List[str]
+    handler_name: str
+    description: Optional[str]
+    filters: list
 
 
 def admin(func):
@@ -57,6 +65,8 @@ def admin(func):
 #  back to the user
 class TelegramBotBase(ABC):
     _config_class: Type[TelegramBotConfig] = TelegramBotConfig
+
+    system_parse_mode = ParseMode.MARKDOWN_V2
 
     def __init__(self, config: _config_class = None, app_data="./app_data"):
         self.app_data = Path(app_data)
@@ -82,7 +92,7 @@ class TelegramBotBase(ABC):
             )
         # aiogram
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
-            token=token, parse_mode=self.config.parse_mode  # plain text
+            token=token  # , parse_mode=self.config.parse_mode  # plain text
         )
         self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
         self._me = None
@@ -116,7 +126,7 @@ class TelegramBotBase(ABC):
     _commands: List
 
     @property
-    def commands(self):
+    def commands(self) -> List[CommandRegistryItem]:
         return self._commands
 
     NO_COMMAND_DESCRIPTION = "No description provided"
@@ -213,20 +223,13 @@ class TelegramBotBase(ABC):
         return file_path
 
 
-command_registry = []
+command_registry: List[CommandRegistryItem] = []
 
 
 Commands = Union[str, List[str]]
 
 
-class CommandRegistryItem(BaseModel):
-    commands: List[str]
-    handler_name: str
-    description: str
-    filters: list
-
-
-# todo: use decorator to mark commands and parse automatically
+# use decorator to mark commands and parse automatically
 def mark_command(
     commands: Commands, description: str = None, filters: list = None, dev=False
 ):
@@ -238,7 +241,7 @@ def mark_command(
             CommandRegistryItem(
                 commands=commands,
                 handler_name=func.__name__,
-                description=description,  # todo: use docstring
+                description=description,  # todo: use docstring by default
                 filters=filters or (),
             )
         )
@@ -264,6 +267,7 @@ class TelegramBot(TelegramBotBase):
         self.messages_stack = defaultdict(list)
         self.errors = defaultdict(lambda: deque(maxlen=128))
 
+    # no decorator to control init order and user access
     # @mark_command(commands=["start"], description="Start command")
     async def start(self, message: types.Message):
         response = dedent(
@@ -376,9 +380,39 @@ class TelegramBot(TelegramBotBase):
             error_message = "No recent error message captured"
             filename = ""
         await self.send_safe(
-            chat_id,
-            error_message,
-            message.message_id,
+            text=error_message,
+            chat_id=chat_id,
+            reply_to_message_id=message.message_id,
+            filename=filename,
+            escape_markdown=True,
+            wrap=False,
+        )
+
+    # explain error
+    @mark_command("explainError", description="Explain error")
+    async def explain_error_command_handler(self, message: types.Message):
+        """
+        Explain latest error with gpt
+        """
+        chat_id = message.chat.id
+        errors = self.errors[chat_id]
+        if errors:
+            error = errors[-1]
+            error_message = error["error"]
+            filename = f"error_message_{error['timestamp']}.txt"
+            gpt_answer = await self.app.gpt_engine.arun(
+                prompt=error_message,
+                user=message.from_user.username,
+                system="Explain this error",
+            )
+            reply_message = f"GPT Explanation:\n{gpt_answer}"
+        else:
+            reply_message = "No recent error message captured"
+            filename = ""
+        await self.send_safe(
+            text=reply_message,
+            chat_id=chat_id,
+            reply_to_message_id=message.message_id,
             filename=filename,
             escape_markdown=True,
             wrap=False,
@@ -566,12 +600,13 @@ class TelegramBot(TelegramBotBase):
 
     async def send_safe(
         self,
-        chat_id,
         text: str,
+        chat_id: int,
         reply_to_message_id=None,
         filename=None,
         escape_markdown=False,
         wrap=True,
+        parse_mode=None,
     ):
         if wrap:
             lines = text.split("\n")
@@ -604,7 +639,7 @@ class TelegramBot(TelegramBotBase):
                     reply_to_message_id=reply_to_message_id,
                     filename=filename,
                 )
-            else:
+            else:  # len(text) < MAX_TELEGRAM_MESSAGE_LENGTH:
                 message_text = text
                 if escape_markdown:
                     message_text = escape_md(text)
@@ -613,13 +648,45 @@ class TelegramBot(TelegramBotBase):
                 await self._aiogram_bot.send_message(
                     chat_id, message_text, reply_to_message_id=reply_to_message_id
                 )
-        else:
+        else:  # not self.send_long_messages_as_files
             for chunk in split_long_message(text):
                 if escape_markdown:
                     chunk = escape_md(chunk)
-                await self._aiogram_bot.send_message(
-                    chat_id, chunk, reply_to_message_id=reply_to_message_id
+                await self._send_with_parse_mode_fallback(
+                    chat_id,
+                    chunk,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode,
                 )
+
+    async def _send_with_parse_mode_fallback(
+        self, chat_id, text, reply_to_message_id=None, parse_mode=None
+    ):
+        """
+        Send message with parse_mode=None if parse_mode is not supported
+        """
+        if parse_mode is None:
+            parse_mode = self.config.parse_mode
+        try:
+            await self._aiogram_bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode=parse_mode,
+            )
+        except Exception:
+            self.logger.warning(
+                f"Failed to send message with parse_mode={parse_mode}. "
+                f"Retrying with parse_mode=None"
+                f"Exception: {traceback.format_exc()}"
+                # todo , data=traceback.format_exc()
+            )
+            await self._aiogram_bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode=None,
+            )
 
     async def _send_as_file(
         self, chat_id, text, reply_to_message_id=None, filename=None

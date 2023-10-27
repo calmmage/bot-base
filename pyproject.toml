@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.3.0"  # add data dir
+version = "0.3.1"  # rework and fix parse mode
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
