@@ -79,6 +79,7 @@ class App(AppBase):
             self.logger.info("Initializing voice recognition")
             self._init_voice_recognition()
 
+        self._scheduler = None
         if self.config.enable_scheduler:
             self.logger.info("Initializing scheduler")
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -86,6 +87,7 @@ class App(AppBase):
             # self._init_scheduler()
             self._scheduler = AsyncIOScheduler()
 
+        self.gpt_engine = None
         if self.config.enable_gpt_engine:
             self.logger.info("Initializing GPT Engine")
             from gpt_kit.gpt_engine.gpt_engine import GptEngine

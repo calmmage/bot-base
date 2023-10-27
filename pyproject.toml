@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.3.4"  # run scheduler on startup
+version = "0.3.5"  # add default components placeholders
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
