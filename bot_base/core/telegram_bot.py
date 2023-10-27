@@ -272,16 +272,20 @@ class TelegramBot(TelegramBotBase):
     async def start(self, message: types.Message):
         response = dedent(
             f"""
-            Hi! I'm the {self.__class__.__name__}.
-            I'm based on the [bot-base](https://github.com/calmmage/bot-base) library.
+            Hi\! I'm the {self.__class__.__name__}\.
+            I'm based on the [bot\-base](https://github.com/calmmage/bot\-base) library\.
             I support the following features:
-            - voice messages parsing
-            - hashtag and attribute recognition (#ignore, ignore=True)
-            - multi-message mode
+            \- voice messages parsing
+            \- hashtag and attribute recognition \(\#ignore, ignore\=True\)
+            \- multi\-message mode
             Use /help for more details
             """
         )
-        await message.answer(response)
+        await self.send_safe(
+            text=response,
+            chat_id=message.chat.id,
+            parse_mode=self.system_parse_mode,
+        )
 
     # @mark_command(["help"], description="Show this help message")
     async def help(self, message: types.Message):
@@ -296,6 +300,7 @@ class TelegramBot(TelegramBotBase):
         await self.send_safe(
             text=reply_message,
             chat_id=message.chat.id,
+            escape_markdown=True,
             parse_mode=self.system_parse_mode,
         )
 
@@ -380,7 +385,8 @@ class TelegramBot(TelegramBotBase):
 
         # Respond to the user
         await message.answer(
-            "Oops, something went wrong! Use /error command if you want details"
+            "Oops, something went wrong! Use /error or /explainerror command if you "
+            "want details"
         )
 
     @mark_command("error", description="Get recent error text")
@@ -399,7 +405,6 @@ class TelegramBot(TelegramBotBase):
             chat_id=chat_id,
             reply_to_message_id=message.message_id,
             filename=filename,
-            escape_markdown=True,
             wrap=False,
         )
 
@@ -429,7 +434,6 @@ class TelegramBot(TelegramBotBase):
             chat_id=chat_id,
             reply_to_message_id=message.message_id,
             filename=filename,
-            escape_markdown=True,
             wrap=False,
         )
 
@@ -660,8 +664,11 @@ class TelegramBot(TelegramBotBase):
                     message_text = escape_md(text)
                 if filename:
                     message_text = escape_md(filename) + "\n" + message_text
-                await self._aiogram_bot.send_message(
-                    chat_id, message_text, reply_to_message_id=reply_to_message_id
+                await self._send_with_parse_mode_fallback(
+                    text=message_text,
+                    chat_id=chat_id,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode,
                 )
         else:  # not self.send_long_messages_as_files
             for chunk in split_long_message(text):
