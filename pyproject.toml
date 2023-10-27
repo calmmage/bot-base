@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.3.3"  # fix start message for new parse mode
+version = "0.3.4"  # run scheduler on startup
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"

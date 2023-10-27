@@ -127,3 +127,18 @@ class App(AppBase):
             logger=self.logger,
         )
         return chunks
+
+    # --------------------------------------------- #
+
+    async def _run_with_scheduler(self):
+        # this seems stupid, but this is a tested working way, so i go with it
+        # rework sometime later - probably can just start and not gather
+        self._scheduler.start()
+        await self.bot.run()
+
+    def run(self):
+        if self.config.enable_scheduler:
+            self.logger.info("Running with scheduler")
+            asyncio.run(self._run_with_scheduler())
+        else:
+            super().run()
