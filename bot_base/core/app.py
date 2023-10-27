@@ -6,6 +6,7 @@ import mongoengine
 import openai
 from dotenv import load_dotenv
 
+# from apscheduler.triggers.interval import IntervalTrigger
 from bot_base.core import DatabaseConfig, TelegramBotConfig
 from bot_base.core.app_config import AppConfig
 from bot_base.core.telegram_bot import TelegramBot
@@ -23,14 +24,24 @@ class AppBase:
     _database_config_class: Type[DatabaseConfig] = DatabaseConfig
     _telegram_bot_config_class: Type[TelegramBotConfig] = TelegramBotConfig
 
-    def __init__(self, config: _app_config_class = None):
+    def __init__(self, data_dir=None, config: _app_config_class = None):
         self.logger = loguru.logger.bind(component=self.__class__.__name__)
         if config is None:
             config = self._load_config()
+        if data_dir is not None:
+            config.data_dir = data_dir
+        # make dir
+        config.data_dir.mkdir(parents=True, exist_ok=True)
         self.config = config
         self.db = self._connect_db()
         self.bot = self._telegram_bot_class(config.telegram_bot, app=self)
         self.logger.info(f"Loaded config: {self.config}")
+
+    @property
+    def data_dir(self):
+        return self.config.data_dir
+
+    # todo_optional: setter, moving the data to the new dir
 
     def _load_config(self, **kwargs):
         load_dotenv()

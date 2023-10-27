@@ -1,8 +1,12 @@
+from pathlib import Path
 from typing import Optional
 
 from aiogram.enums import ParseMode
+from dotenv import load_dotenv
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
+
+load_dotenv()
 
 
 class DatabaseConfig(BaseSettings):
@@ -32,7 +36,12 @@ class TelegramBotConfig(BaseSettings):
     }
 
 
+DEFAULT_DATA_DIR = "app_data"
+
+
 class AppConfig(BaseSettings):
+    data_dir: Path = DEFAULT_DATA_DIR
+
     database: DatabaseConfig = DatabaseConfig()
     telegram_bot: TelegramBotConfig = TelegramBotConfig()
     # todo: support missing api key
