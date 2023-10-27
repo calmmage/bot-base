@@ -44,9 +44,17 @@ class AppConfig(BaseSettings):
 
     database: DatabaseConfig = DatabaseConfig()
     telegram_bot: TelegramBotConfig = TelegramBotConfig()
-    # todo: support missing api key
-    openai_api_key: SecretStr
+    # todo: use this setting. Deprecated
+    enable_openai_api: bool = False
+    enable_gpt_engine: bool = False
+    openai_api_key: SecretStr = SecretStr("")
+
+    # todo: use this setting
+    enable_voice_recognition: bool = False
     process_audio_in_parallel: bool = False
+
+    # todo: use this setting
+    enable_scheduler: bool = False
 
     # todo: add extra {APP}_ prefix to all env vars?
     #  will this work?

@@ -70,10 +70,45 @@ class AppBase:
 class App(AppBase):
     def __init__(self, config: AppConfig = None):
         super().__init__(config=config)
-        self._init_openai()
+        if self.config.enable_openai_api:
+            # deprecate this
+            self.logger.warning("OpenAI API is deprecated, use GPT Engine instead")
+            self._init_openai()
+
+        if self.config.enable_voice_recognition:
+            self.logger.info("Initializing voice recognition")
+            self._init_voice_recognition()
+
+        if self.config.enable_scheduler:
+            self.logger.info("Initializing scheduler")
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+            # self._init_scheduler()
+            self._scheduler = AsyncIOScheduler()
+
+        if self.config.enable_gpt_engine:
+            self.logger.info("Initializing GPT Engine")
+            from gpt_kit.gpt_engine.gpt_engine import GptEngine
+
+            self.gpt_engine = GptEngine(config.gpt_engine, app=self)
+            # self._init_gpt_engine()
 
     def _init_openai(self):
         openai.api_key = self.config.openai_api_key.get_secret_value()
+
+    # def _init_scheduler(self):
+    #     self._scheduler = AsyncIOScheduler()
+
+    # ------------------ GPT Engine ------------------ #
+
+    # ------------------ Audio ------------------ #
+
+    def _init_voice_recognition(self):
+        # todo: check that codecs are installed
+        #  install if necessary
+        # todo: check that ffmpeg is installed
+        # todo: check pyrogram token and api_id
+        pass
 
     async def parse_audio(
         self,

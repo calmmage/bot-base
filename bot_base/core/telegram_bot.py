@@ -289,7 +289,15 @@ class TelegramBot(TelegramBotBase):
         #  I think I already implemented this somewhere.. summary bot?
         #  automatically gather docstrings of all methods with @mark_command
         # todo: bonus: use gpt for help conversation
-        raise NotImplementedError
+        reply_message = ""
+        for command in self.commands:
+            reply_message += f"/{command[0]} - {command[1]}\n"
+        # todo: hide the dev commands
+        await self.send_safe(
+            text=reply_message,
+            chat_id=message.chat.id,
+            parse_mode=self.system_parse_mode,
+        )
 
     def filter_unauthorised(self, message):
         username = message.from_user.username
@@ -328,7 +336,9 @@ class TelegramBot(TelegramBotBase):
             or await self.check_message_mentions_bot(message)
             or await self.check_message_uses_bot_command(message)
         ):
-            await message.answer(self.UNAUTHORISED_RESPONSE)
+            await message.answer(
+                self.UNAUTHORISED_RESPONSE, parse_mode=self.system_parse_mode
+            )
         else:
             pass
 
@@ -345,16 +355,21 @@ class TelegramBot(TelegramBotBase):
         if self._multi_message_mode:
             self.messages_stack[message.chat.id].append(message)
         else:
-            # todo: use "make_simpple_command_handler" to create this demo
+            # todo: use "make_simple_command_handler" to create this demo
 
             data = self._parse_message_text(message_text)
             response = f"Message parsed: {json.dumps(data, ensure_ascii=False)}"
-            await self.send_safe(message.chat.id, response, message.message_id)
+            await self.send_safe(
+                text=response,
+                chat_id=message.chat.id,
+                reply_to_message_id=message.message_id,
+            )
 
         return message_text
 
     async def error_handler(self, event: types.ErrorEvent, message: types.Message):
-        # Get chat ID from the message. This will vary depending on the library/framework you're using.
+        # Get chat ID from the message.
+        # This will vary depending on the library/framework you're using.
         chat_id = message.chat.id
         error_data = {
             "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),

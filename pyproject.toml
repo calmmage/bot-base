@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bot-base"
-version = "0.3.1"  # rework and fix parse mode
+version = "0.3.2"  # add new components skeleton
 description = ""
 authors = ["Petr Lavrov <calmmage@gmail.com>"]
 readme = "README.md"
