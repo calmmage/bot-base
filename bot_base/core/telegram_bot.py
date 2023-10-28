@@ -1,3 +1,5 @@
+import random
+
 import asyncio
 import json
 import os
@@ -783,9 +785,16 @@ class TelegramBot(TelegramBotBase):
         await reply.delete()
         await message.delete()
 
-    # todo: make mark_command work finally
-    # option 1: just write from scratch
-    # option 2: find how I did it before and copy..
-    # if I assume its a singleton - becomes easier?
-    # func name and then getattr..
-    # but this should be a separate branch / commit?
+    # -----------------------------------------------------
+    # easter eggs, experimental
+    # -----------------------------------------------------
+
+    _ping_replies_path = Path(__file__).parent / "ping_replies.txt"
+    ping_replies = _ping_replies_path.read_text().splitlines()
+
+    @mark_command(commands="ping", description="Ping the bot")
+    async def ping_handler(self, message: types.Message):
+        self.logger.debug("Received ping")
+        # random choice from the list of replies
+        message_text = random.choice(self.ping_replies)
+        await self.send_safe(text=message_text, chat_id=message.chat.id)
