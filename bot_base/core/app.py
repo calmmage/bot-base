@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import asyncio
 from typing import Type
 
@@ -29,7 +31,7 @@ class AppBase:
         if config is None:
             config = self._load_config()
         if data_dir is not None:
-            config.data_dir = data_dir
+            config.data_dir = Path(data_dir)
         # make dir
         config.data_dir.mkdir(parents=True, exist_ok=True)
         self.config = config
@@ -68,8 +70,8 @@ class AppBase:
 
 
 class App(AppBase):
-    def __init__(self, config: AppConfig = None):
-        super().__init__(config=config)
+    def __init__(self, data_dir=None, config: AppConfig = None):
+        super().__init__(data_dir=data_dir, config=config)
         if self.config.enable_openai_api:
             # deprecate this
             self.logger.warning("OpenAI API is deprecated, use GPT Engine instead")
