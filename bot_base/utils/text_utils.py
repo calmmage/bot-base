@@ -19,7 +19,10 @@ def split_long_message(text, max_length=MAX_TELEGRAM_MESSAGE_LENGTH, sep="\n"):
     return chunks
 
 
-escape_re = re.compile(r"[_*[\]~`#]")
+SPECIAL_CHARS = r"\\_\*\[\]\(\)~`><&#+\-=\|\{\}\.\!"
+
+
+escape_re = re.compile(f"[{SPECIAL_CHARS}]")
 
 
 def escape_md(text: str) -> str:
