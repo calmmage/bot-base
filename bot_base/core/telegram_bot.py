@@ -1,30 +1,32 @@
+from collections import defaultdict, deque
+
+import aiogram
 import asyncio
 import json
+import loguru
 import os
 import pprint
+import pyrogram
+import random
 import re
 import subprocess
 import textwrap
 import traceback
 from abc import ABC, abstractmethod
-from collections import defaultdict, deque
-from datetime import datetime
-from functools import wraps
-from io import BytesIO
-from pathlib import Path
-from tempfile import mkstemp
-from textwrap import dedent
-from typing import TYPE_CHECKING, Union
-from typing import Type, List, Dict
-
-import aiogram
-import loguru
-import pyrogram
 from aiogram import F
 from aiogram import types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from datetime import datetime
 from dotenv import load_dotenv
+from functools import wraps
+from io import BytesIO
+from pathlib import Path
+from pydantic import BaseModel
+from tempfile import mkstemp
+from textwrap import dedent
+from typing import TYPE_CHECKING, Union, Optional
+from typing import Type, List, Dict
 
 from bot_base.core import TelegramBotConfig
 from bot_base.utils import tools_dir
@@ -36,6 +38,13 @@ from bot_base.utils.text_utils import (
 
 if TYPE_CHECKING:
     from bot_base.core import App
+
+
+class CommandRegistryItem(BaseModel):
+    commands: List[str]
+    handler_name: str
+    description: Optional[str]
+    filters: list
 
 
 def admin(func):
@@ -51,11 +60,14 @@ def admin(func):
     # return wrapped
     return func
 
+
 # todo: find and use simple_command decorator that parses the incoming
 #  message and passes the parsed data to the handler, then sends the result
 #  back to the user
 class TelegramBotBase(ABC):
     _config_class: Type[TelegramBotConfig] = TelegramBotConfig
+
+    system_parse_mode = ParseMode.MARKDOWN_V2
 
     def __init__(self, config: _config_class = None, app_data="./app_data"):
         self.app_data = Path(app_data)
@@ -73,11 +85,18 @@ class TelegramBotBase(ABC):
         # Pyrogram
         self.pyrogram_client = self._init_pyrogram_client()
 
+        if config.parse_mode is not None:
+            # Warn about broken features if parse_mode is not None
+            self.logger.warning(
+                "Custom default parse_mode is WIP "
+                "and some features may not work as expected"
+            )
         # aiogram
         self._aiogram_bot: aiogram.Bot = aiogram.Bot(
-            token=token, parse_mode=ParseMode.MARKDOWN
+            token=token  # , parse_mode=self.config.parse_mode  # plain text
         )
         self._dp: aiogram.Dispatcher = aiogram.Dispatcher(bot=self._aiogram_bot)
+        self._me = None
 
     @property
     def downloads_dir(self):
@@ -101,13 +120,14 @@ class TelegramBotBase(ABC):
         if isinstance(commands, str):
             commands = [commands]
         self.logger.info(f"Registering command {commands}")
-        self._commands.extend([(c.lower(), description) for c in commands])
+        commands = [c.lower() for c in commands]
+        self._commands.extend([(c, description) for c in commands])
         self._dp.message.register(handler, Command(commands=commands), *filters)
 
     _commands: List
 
     @property
-    def commands(self):
+    def commands(self) -> List[CommandRegistryItem]:
         return self._commands
 
     NO_COMMAND_DESCRIPTION = "No description provided"
@@ -121,14 +141,20 @@ class TelegramBotBase(ABC):
 
     @abstractmethod
     async def bootstrap(self):
+        self._me = await self._aiogram_bot.get_me()
         # todo: auto-add all commands marked with decorator
-        for commands, handler_name, description, filters in command_registry:
-            handler = self.__getattribute__(handler_name)
-            for command in commands:
-                # self._commands.append([command, description])
-                # self._dp.message.register(handler, Command(commands),
-                # *filters)
-                pass
+        for item in command_registry:
+            handler = self.__getattribute__(item.handler_name)
+            self.register_command(
+                handler=handler,
+                commands=item.commands,
+                description=item.description,
+                filters=item.filters,
+            )
+
+    @property
+    def me(self):
+        return self._me
 
     async def run(self) -> None:
         await self.bootstrap()
@@ -198,23 +224,25 @@ class TelegramBotBase(ABC):
         return file_path
 
 
-command_registry = []
+command_registry: List[CommandRegistryItem] = []
 
 
 Commands = Union[str, List[str]]
 
 
-# todo: use decorator to mark commands and parse automatically
-def mark_command(commands: Commands, description: str = None, filters: list = None):
+# use decorator to mark commands and parse automatically
+def mark_command(
+    commands: Commands, description: str = None, filters: list = None, dev=False
+):
     if isinstance(commands, str):
         commands = [commands]
 
     def wrapper(func):
         command_registry.append(
-            dict(
+            CommandRegistryItem(
                 commands=commands,
                 handler_name=func.__name__,
-                description=description,  # todo: use docstring
+                description=description,  # todo: use docstring by default
                 filters=filters or (),
             )
         )
@@ -240,27 +268,42 @@ class TelegramBot(TelegramBotBase):
         self.messages_stack = defaultdict(list)
         self.errors = defaultdict(lambda: deque(maxlen=128))
 
+    # no decorator to control init order and user access
+    # @mark_command(commands=["start"], description="Start command")
     async def start(self, message: types.Message):
         response = dedent(
             f"""
-            Hi! I'm the {self.__class__.__name__}.
-            I'm based on the [bot-base](https://github.com/calmmage/bot-base) library.
+            Hi\! I'm the {self.__class__.__name__}\.
+            I'm based on the [bot\-base](https://github.com/calmmage/bot\-base) library\.
             I support the following features:
-            - voice messages parsing
-            - hashtag and attribute recognition (#ignore, ignore=True)
-            - multi-message mode
+            \- voice messages parsing
+            \- hashtag and attribute recognition \(\#ignore, ignore\=True\)
+            \- multi\-message mode
             Use /help for more details
             """
         )
-        await message.answer(response)
+        await self.send_safe(
+            text=response,
+            chat_id=message.chat.id,
+            parse_mode=self.system_parse_mode,
+        )
 
-    @mark_command(["help"], description="Show this help message")
+    # @mark_command(["help"], description="Show this help message")
     async def help(self, message: types.Message):
         # todo: send a description / docstring of each command
         #  I think I already implemented this somewhere.. summary bot?
         #  automatically gather docstrings of all methods with @mark_command
         # todo: bonus: use gpt for help conversation
-        raise NotImplementedError
+        reply_message = ""
+        for command in self.commands:
+            reply_message += f"/{command[0]} - {command[1]}\n"
+        # todo: hide the dev commands
+        await self.send_safe(
+            text=reply_message,
+            chat_id=message.chat.id,
+            escape_markdown=True,
+            parse_mode=self.system_parse_mode,
+        )
 
     def filter_unauthorised(self, message):
         username = message.from_user.username
@@ -268,11 +311,42 @@ class TelegramBot(TelegramBotBase):
         # self.logger.debug(f"Allowed users:  {self._config.allowed_users}")
         return username not in self.config.allowed_users
 
-    UNAUTHORISED_RESPONSE = dedent("You are not authorized to use this bot.")
+    UNAUTHORISED_RESPONSE = dedent(
+        """You are not authorized to use this bot.
+        Available commands: /start, /help
+        """
+    )
+
+    async def check_message_mentions_bot(self, message):
+        message_text = await self._extract_message_text(message)
+        bot_username = self.me.username
+        return bot_username in message_text
+
+    async def check_message_uses_bot_command(self, message):
+        message_text = await self._extract_message_text(message)
+        if not message_text.startswith("/"):
+            return False
+        command = message_text.split(" ", 1)[0]
+        return self.has_command(command)
+
+    # todo: test
+    def has_command(self, command):
+        return any([command in c[0] for c in self.commands])
 
     async def unauthorized(self, message: types.Message):
         self.logger.info(f"Unauthorized user {message.from_user.username}")
-        await message.answer(self.UNAUTHORISED_RESPONSE)
+        # todo 1: once a day respond to a particular user - in
+        # if direct @ mention or /command that in self.has_command - always respond.
+        if (
+            message.chat.type == "private"
+            or await self.check_message_mentions_bot(message)
+            or await self.check_message_uses_bot_command(message)
+        ):
+            await message.answer(
+                self.UNAUTHORISED_RESPONSE, parse_mode=self.system_parse_mode
+            )
+        else:
+            pass
 
     async def chat_message_handler(self, message: types.Message):
         """
@@ -285,18 +359,23 @@ class TelegramBot(TelegramBotBase):
             f"Received message", user=message.from_user.username, data=message_text
         )
         if self._multi_message_mode:
-            self.messages_stack.append(message)
+            self.messages_stack[message.chat.id].append(message)
         else:
-            # todo: use "make_simpple_command_handler" to create this demo
+            # todo: use "make_simple_command_handler" to create this demo
 
             data = self._parse_message_text(message_text)
             response = f"Message parsed: {json.dumps(data, ensure_ascii=False)}"
-            await self.send_safe(message.chat.id, response, message.message_id)
+            await self.send_safe(
+                text=response,
+                chat_id=message.chat.id,
+                reply_to_message_id=message.message_id,
+            )
 
         return message_text
 
     async def error_handler(self, event: types.ErrorEvent, message: types.Message):
-        # Get chat ID from the message. This will vary depending on the library/framework you're using.
+        # Get chat ID from the message.
+        # This will vary depending on the library/framework you're using.
         chat_id = message.chat.id
         error_data = {
             "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
@@ -307,9 +386,11 @@ class TelegramBot(TelegramBotBase):
 
         # Respond to the user
         await message.answer(
-            "Oops, something went wrong! Use /error command if you want details"
+            "Oops, something went wrong! Use /error or /explainerror command if you "
+            "want details"
         )
 
+    @mark_command("error", description="Get recent error text")
     async def error_command_handler(self, message: types.Message):
         chat_id = message.chat.id
         errors = self.errors[chat_id]
@@ -321,12 +402,42 @@ class TelegramBot(TelegramBotBase):
             error_message = "No recent error message captured"
             filename = ""
         await self.send_safe(
-            chat_id,
-            error_message,
-            message.message_id,
+            text=error_message,
+            chat_id=chat_id,
+            reply_to_message_id=message.message_id,
             filename=filename,
-            escape_markdown=True,
-            wrap=False
+            wrap=False,
+        )
+
+    # todo: add init check if gpt_engine is enabled
+    # todo: add option to set up gpt engine at runtime (per user)
+    # explain error
+    @mark_command("explainError", description="Explain error")
+    async def explain_error_command_handler(self, message: types.Message):
+        """
+        Explain latest error with gpt
+        """
+        chat_id = message.chat.id
+        errors = self.errors[chat_id]
+        if errors:
+            error = errors[-1]
+            error_message = error["error"]
+            filename = f"error_message_{error['timestamp']}.txt"
+            gpt_answer = await self.app.gpt_engine.arun(
+                prompt=error_message,
+                user=message.from_user.username,
+                system="Explain this error",
+            )
+            reply_message = f"GPT Explanation:\n{gpt_answer}"
+        else:
+            reply_message = "No recent error message captured"
+            filename = ""
+        await self.send_safe(
+            text=reply_message,
+            chat_id=chat_id,
+            reply_to_message_id=message.message_id,
+            filename=filename,
+            wrap=False,
         )
 
     # ------------------------------------------------------------
@@ -511,36 +622,38 @@ class TelegramBot(TelegramBotBase):
 
     async def send_safe(
         self,
-        chat_id,
         text: str,
+        chat_id: int,
         reply_to_message_id=None,
         filename=None,
         escape_markdown=False,
-        wrap=True
+        wrap=True,
+        parse_mode=None,
     ):
         if wrap:
-            lines = text.split('\n')
+            lines = text.split("\n")
             new_lines = [textwrap.fill(line, width=88) for line in lines]
-            text = '\n'.join(new_lines[:self.PREVIEW_CUTOFF])
+            text = "\n".join(new_lines)
         # todo: add 3 send modes - always text, always file, auto
         if self.send_long_messages_as_files:
             if len(text) > MAX_TELEGRAM_MESSAGE_LENGTH:
                 if filename is None:
                     filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
-                preview = text[: self.PREVIEW_CUTOFF]
-                if escape_markdown:
-                    preview = escape_md(preview)
-                await self._aiogram_bot.send_message(
-                    chat_id,
-                    dedent(
-                        f"""
-                        Message is too long, sending as file {escape_md(filename)} 
-                        Preview: 
-                        """
+                if self.config.send_preview_for_long_messages:
+                    preview = text[: self.PREVIEW_CUTOFF]
+                    if escape_markdown:
+                        preview = escape_md(preview)
+                    await self._aiogram_bot.send_message(
+                        chat_id,
+                        dedent(
+                            f"""
+                            Message is too long, sending as file {escape_md(filename)} 
+                            Preview: 
+                            """
+                        )
+                        + preview
+                        + "...",
                     )
-                    + preview
-                    + "...",
-                )
 
                 await self._send_as_file(
                     chat_id,
@@ -548,22 +661,57 @@ class TelegramBot(TelegramBotBase):
                     reply_to_message_id=reply_to_message_id,
                     filename=filename,
                 )
-            else:
+            else:  # len(text) < MAX_TELEGRAM_MESSAGE_LENGTH:
                 message_text = text
                 if escape_markdown:
                     message_text = escape_md(text)
                 if filename:
-                    message_text = escape_md(filename) + '\n' + message_text
-                await self._aiogram_bot.send_message(
-                    chat_id, message_text, reply_to_message_id=reply_to_message_id
+                    message_text = escape_md(filename) + "\n" + message_text
+                await self._send_with_parse_mode_fallback(
+                    text=message_text,
+                    chat_id=chat_id,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode,
                 )
-        else:
+        else:  # not self.send_long_messages_as_files
             for chunk in split_long_message(text):
                 if escape_markdown:
                     chunk = escape_md(chunk)
-                await self._aiogram_bot.send_message(
-                    chat_id, chunk, reply_to_message_id=reply_to_message_id
+                await self._send_with_parse_mode_fallback(
+                    chat_id,
+                    chunk,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode,
                 )
+
+    async def _send_with_parse_mode_fallback(
+        self, chat_id, text, reply_to_message_id=None, parse_mode=None
+    ):
+        """
+        Send message with parse_mode=None if parse_mode is not supported
+        """
+        if parse_mode is None:
+            parse_mode = self.config.parse_mode
+        try:
+            await self._aiogram_bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode=parse_mode,
+            )
+        except Exception:
+            self.logger.warning(
+                f"Failed to send message with parse_mode={parse_mode}. "
+                f"Retrying with parse_mode=None"
+                f"Exception: {traceback.format_exc()}"
+                # todo , data=traceback.format_exc()
+            )
+            await self._aiogram_bot.send_message(
+                chat_id,
+                text,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode=None,
+            )
 
     async def _send_as_file(
         self, chat_id, text, reply_to_message_id=None, filename=None
@@ -580,14 +728,12 @@ class TelegramBot(TelegramBotBase):
         return self.config.send_long_messages_as_files
 
     async def bootstrap(self):
+        self.register_command(self.start, "start", "Start command")
+        self.register_command(self.help, "help", "Help message")
         self._dp.error.register(self.error_handler, F.update.message.as_("message"))
-        # todo: simple message parsing
-        self.register_command(self.start, commands="start")
-        self.register_command(self.help, commands="help")
-        self.register_command(self.error_command_handler, commands="error")
+        # self.register_command(self.error_command_handler, commands="error")
         self._dp.message.register(self.unauthorized, self.filter_unauthorised)
-        self.register_command(self.multi_message_start, commands="multistart")
-        self.register_command(self.multi_message_end, commands="multiend")
+        await super().bootstrap()
 
         if self.config.test_mode:
             self.logger.debug("Running in test mode")
@@ -595,8 +741,12 @@ class TelegramBot(TelegramBotBase):
             self.register_command(self.test_error_handler, commands="testerror")
 
         # admin commands
-        self.register_command(self.uptime, commands="uptime")
+        # self.register_command(self.uptime, commands="devUptime")
 
+        # dev
+        # self.register_command(self.get_chat_id, commands="devGetChatId")
+
+        # todo: simple message parsing
         self._dp.message.register(self.chat_message_handler)
 
     # -----------------------------------------------------
@@ -610,8 +760,8 @@ class TelegramBot(TelegramBotBase):
         self.logger.debug("Received testerror command")
         raise Exception("TestError")
 
-    @admin
-    @mark_command(commands="uptime", description="Show bot uptime")
+    # @admin
+    @mark_command(commands="devUptime", description="Show bot uptime", dev=True)
     async def uptime(self, message: types.Message):
         uptime = datetime.now() - self.start_time
         # await message.answer(f"Uptime: {uptime}")
@@ -619,3 +769,33 @@ class TelegramBot(TelegramBotBase):
         # e.g. 1 day, 2 hours, 3 minutes, 4 seconds
         # this is the code:
         await message.answer(f"Uptime: {uptime}")
+
+    # -----------------------------------------------------
+    # dev commands
+    # todo: can I set self-destruct timer on these commands?
+    # option 1: in config
+    # option 2: in class variable
+    # option 3: in constructor / init - attribute
+    # -----------------------------------------------------
+
+    @mark_command(commands="devGetChatId", dev=True, description="Show chat id")
+    async def get_chat_id(self, message: types.Message):
+        reply = await message.answer(f"Chat id: {message.chat.id}")
+        # todo: rework into decorator / apply to all dev commands
+        await asyncio.sleep(self.config.dev_message_timeout)
+        await reply.delete()
+        await message.delete()
+
+    # -----------------------------------------------------
+    # easter eggs, experimental
+    # -----------------------------------------------------
+
+    _ping_replies_path = Path(__file__).parent / "ping_replies.txt"
+    ping_replies = _ping_replies_path.read_text().splitlines()
+
+    @mark_command(commands="ping", description="Ping the bot")
+    async def ping_handler(self, message: types.Message):
+        self.logger.debug("Received ping")
+        # random choice from the list of replies
+        message_text = random.choice(self.ping_replies)
+        await self.send_safe(text=message_text, chat_id=message.chat.id)
