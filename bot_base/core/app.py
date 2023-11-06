@@ -1,12 +1,10 @@
-from pathlib import Path
-
 import asyncio
-from typing import Type
-
 import loguru
 import mongoengine
 import openai
 from dotenv import load_dotenv
+from pathlib import Path
+from typing import Type
 
 # from apscheduler.triggers.interval import IntervalTrigger
 from bot_base.core import DatabaseConfig, TelegramBotConfig
@@ -123,12 +121,15 @@ class App(AppBase):
     ):
         if parallel is None:
             parallel = self.config.process_audio_in_parallel
+
         chunks = await split_and_transcribe_audio(
             audio,
             period=period,
             buffer=buffer,
             parallel=parallel,
             logger=self.logger,
+            parallel_size_limit=self.config.parallel_size_limit,
+            in_memory=self.config.process_audio_in_memory,
         )
         return chunks
 

@@ -643,9 +643,9 @@ class TelegramBot(TelegramBotBase):
                     preview = text[: self.PREVIEW_CUTOFF]
                     if escape_markdown:
                         preview = escape_md(preview)
-                    await self._aiogram_bot.send_message(
-                        chat_id,
-                        dedent(
+
+                    await self._send_with_parse_mode_fallback(
+                        text=dedent(
                             f"""
                             Message is too long, sending as file {escape_md(filename)} 
                             Preview: 
@@ -653,6 +653,9 @@ class TelegramBot(TelegramBotBase):
                         )
                         + preview
                         + "...",
+                        chat_id=chat_id,
+                        reply_to_message_id=reply_to_message_id,
+                        parse_mode=parse_mode,
                     )
 
                 await self._send_as_file(
@@ -666,7 +669,11 @@ class TelegramBot(TelegramBotBase):
                 if escape_markdown:
                     message_text = escape_md(text)
                 if filename:
-                    message_text = escape_md(filename) + "\n" + message_text
+                    if self._aiogram_bot.parse_mode == ParseMode.MARKDOWN_V2:
+                        message_text = escape_md(filename) + "\n" + message_text
+                    else:
+                        message_text = filename + "\n" + message_text
+
                 await self._send_with_parse_mode_fallback(
                     text=message_text,
                     chat_id=chat_id,

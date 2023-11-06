@@ -1,10 +1,9 @@
-from pathlib import Path
-from typing import Optional
-
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
+from pathlib import Path
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 load_dotenv()
 
@@ -51,7 +50,9 @@ class AppConfig(BaseSettings):
 
     # todo: use this setting
     enable_voice_recognition: bool = False
-    process_audio_in_parallel: bool = False
+    process_audio_in_parallel: bool = True
+    parallel_size_limit: int = 2 * 60 * 60 * 1000
+    process_audio_in_memory: bool = True
 
     # todo: use this setting
     enable_scheduler: bool = False
