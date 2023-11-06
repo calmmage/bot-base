@@ -17,17 +17,21 @@ def setup_environment(monkeypatch):
 
 @pytest.fixture
 def app(setup_environment):
-    from bot_base.core.app_config import AppConfig
+    from bot_base.core.app_config import AppConfig, DatabaseConfig, TelegramBotConfig
 
-    config = AppConfig()
+    tc = TelegramBotConfig()
+    dc = DatabaseConfig()
+    config = AppConfig(telegram_bot=tc, database=dc)
     return App(config=config)
 
 
 @pytest.fixture
 def app_base(setup_environment):
-    from bot_base.core.app_config import AppConfig
+    from bot_base.core.app_config import AppConfig, DatabaseConfig, TelegramBotConfig
 
-    config = AppConfig()
+    tc = TelegramBotConfig()
+    dc = DatabaseConfig()
+    config = AppConfig(telegram_bot=tc, database=dc)
     return AppBase(config=config)
 
 

@@ -40,4 +40,4 @@ def test_enable_voice_recognition_default(app_config):
 
 
 def test_enable_scheduler_default(app_config):
-    assert app_config.enbale_scheduler is False
+    assert app_config.enable_scheduler is False
